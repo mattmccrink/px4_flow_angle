@@ -3,7 +3,6 @@ px4_add_module(
 	MAIN flow_angle
 	SRCS
 		FlowAngle.cpp
-		flow_angle_params.c
 	# No DEPENDS: external modules are configured before src/lib, so depending on
 	# a src/lib target (e.g. px4_work_queue) fails with "non-existent target".
 	# A thread-based ModuleBase needs no such dependency. The I2CSPIDriver refactor
