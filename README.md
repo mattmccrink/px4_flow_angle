@@ -84,26 +84,40 @@ out-of-tree build, the custom message, and publication all work.
   startup script rather than editing ROMFS, e.g. add `flow_angle start` to
   `/fs/microsd/etc/extras.txt` — keeps boot config out of the firmware image.
 
-## External-module build-order constraint (important)
+## REQUIRED: reorder the external-modules block in PX4's root CMake
 
-PX4 configures external modules (root CMake ~L408-412) **before** `src/lib`
-(~L425), so an external module that lists a `src/lib` target in `DEPENDS` (e.g.
-`px4_work_queue`) fails at configure with `non-existent target`. Two consequences
-baked into this scaffold:
+This is not optional even for milestone 1. In v1.17 PX4 configures external
+modules (root CMake ~L405-414) **before** `platforms/` (~L428) and `src/lib`
+(~L425). But `px4_add_module` links every module against `px4_platform`, which is
+what supplies the `px4_platform_common` include directories. At external-module
+configure time that target doesn't exist yet, so CMake silently degrades it to a
+bare link flag, drops the includes, and the module compiles without `ModuleBase`
+visible — the symptom is:
+
+    error: expected template-name before '<' token
+    class FlowAngle : public ModuleBase<FlowAngle>
+
+The fix is a one-block move of the external-modules `add_subdirectory` section to
+just after the in-tree module loop (so `platforms/`, `src/lib`, and the in-tree
+drivers all exist first, and it's still ahead of the events/metadata/parameters
+libs that scan module sources). Apply with the bundled script:
+
+    python3 tools/patch_px4_external_order.py \
+        /home/mattmccrink/PX4-Autopilot/CMakeLists.txt
+
+It's content-matched and idempotent, so it's safe to re-run and to re-apply after
+bumping PX4 to a new tag — keep it in your build script. This is the "PX4 plus one
+documented patch" cost of an out-of-tree module; it also makes milestone 2's
+`DEPENDS px4_work_queue drivers__device` resolve, since those targets now exist
+when the external module is configured.
+
+Two other choices in this scaffold that keep it robust:
 
 - Milestone 1 is a **thread-based `ModuleBase`** (`px4_task_spawn_cmd` + `run()`),
-  which needs **no `DEPENDS`** at all — mirrors `src/templates/template_module`.
-- Params are read with raw `param_find` / `param_get` (not `DEFINE_PARAMETERS`),
-  so the module compiles and runs even if the external param scan doesn't register
-  `FA_*`. Check with `param show FA_RATE` in nsh; if they're missing the module
-  still runs on the built-in defaults.
-
-Milestone 2 (I2CSPIDriver owning the mux) *does* need `drivers__device` and
-`px4_work_queue`. The cleanest fix is a small, documented one-block reorder of the
-PX4 root `CMakeLists.txt` — move the external-modules `add_subdirectory` block to
-just after `add_subdirectory(src/lib ...)`. Keep it as a tracked patch applied per
-release; it's stable and trivial to re-apply, and it's the price of an external
-driver that uses the I2C framework.
+  no `DEPENDS` needed — mirrors `src/templates/template_module`.
+- Params use raw `param_find` / `param_get` (not `DEFINE_PARAMETERS`), so the
+  module runs even if the external param scan doesn't register `FA_*`. Check with
+  `param show FA_RATE` in nsh; if missing, it runs on the built-in defaults.
 
 ## Milestones
 
