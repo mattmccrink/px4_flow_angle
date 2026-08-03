@@ -15,15 +15,22 @@ Target: **PX4 v1.17 (current stable).**
 
 ```
 px4_flow_angle/
-├── CMakeLists.txt                 # registers modules/flow_angle
 ├── msg/
-│   ├── CMakeLists.txt             # registers SensorFlowAngle.msg (out-of-tree)
+│   ├── CMakeLists.txt             # sets config_msg_list_external (SensorFlowAngle.msg)
 │   └── SensorFlowAngle.msg        # -> topic sensor_flow_angle, struct sensor_flow_angle_s
-└── src/modules/flow_angle/
-    ├── CMakeLists.txt             # px4_add_module(... EXTERNAL)
-    ├── FlowAngle.hpp / .cpp       # milestone-1 scaffold: publishes synthetic data
-    └── flow_angle_params.c        # FA_SIM_EN, FA_RATE, FA_Q_MIN
+└── src/
+    ├── CMakeLists.txt             # sets config_module_list_external -> modules/flow_angle
+    └── modules/flow_angle/
+        ├── CMakeLists.txt         # px4_add_module(... EXTERNAL)
+        ├── FlowAngle.hpp / .cpp   # milestone-1 scaffold: publishes synthetic data
+        └── flow_angle_params.c    # FA_SIM_EN, FA_RATE, FA_Q_MIN
 ```
+
+Note on v1.17: the build reads `config_module_list_external` from
+`src/CMakeLists.txt` (via `add_subdirectory(".../src")` + `PARENT_SCOPE`) — **not**
+from a repo-root `CMakeLists.txt`. Older devguide pages describe a root-level
+file; that layout does not work on v1.17.0. The `msg/` side is unchanged: the
+in-tree `msg/CMakeLists.txt` picks up `${EXTERNAL_MODULES_LOCATION}/msg`.
 
 ## One-time setup (superproject with PX4 pinned as a submodule)
 
@@ -77,20 +84,26 @@ out-of-tree build, the custom message, and publication all work.
   startup script rather than editing ROMFS, e.g. add `flow_angle start` to
   `/fs/microsd/etc/extras.txt` — keeps boot config out of the firmware image.
 
-## Likely first-build friction (expected, not alarming)
+## External-module build-order constraint (important)
 
-These are the spots most sensitive to the exact v1.17 API; paste the compiler
-output and we fix them:
+PX4 configures external modules (root CMake ~L408-412) **before** `src/lib`
+(~L425), so an external module that lists a `src/lib` target in `DEPENDS` (e.g.
+`px4_work_queue`) fails at configure with `non-existent target`. Two consequences
+baked into this scaffold:
 
-1. **External param codegen.** If `px4::params::FA_SIM_EN` etc. aren't generated
-   for the external module, the `DEFINE_PARAMETERS` block won't compile. Fallback
-   is to read them with `param_find("FA_SIM_EN")` / `param_get` directly — no
-   dependency on the external param scan.
-2. **Work-queue name / ScheduledWorkItem signature.** `wq_configurations::lp_default`
-   and the `(name, config)` constructor are stable, but verify against
-   `src/templates/` in your checkout if it complains.
-3. **`task_id_is_work_queue`** idiom — confirm it's still the work-queue spawn
-   pattern in v1.17 (it has been for several releases).
+- Milestone 1 is a **thread-based `ModuleBase`** (`px4_task_spawn_cmd` + `run()`),
+  which needs **no `DEPENDS`** at all — mirrors `src/templates/template_module`.
+- Params are read with raw `param_find` / `param_get` (not `DEFINE_PARAMETERS`),
+  so the module compiles and runs even if the external param scan doesn't register
+  `FA_*`. Check with `param show FA_RATE` in nsh; if they're missing the module
+  still runs on the built-in defaults.
+
+Milestone 2 (I2CSPIDriver owning the mux) *does* need `drivers__device` and
+`px4_work_queue`. The cleanest fix is a small, documented one-block reorder of the
+PX4 root `CMakeLists.txt` — move the external-modules `add_subdirectory` block to
+just after `add_subdirectory(src/lib ...)`. Keep it as a tracked patch applied per
+release; it's stable and trivial to re-apply, and it's the price of an external
+driver that uses the I2C framework.
 
 ## Milestones
 
