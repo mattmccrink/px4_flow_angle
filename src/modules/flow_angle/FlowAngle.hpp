@@ -7,6 +7,7 @@
 #include <parameters/param.h>
 #include <uORB/uORB.h>
 #include <uORB/topics/sensor_flow_angle.h>
+#include <uORB/topics/debug_array.h>
 
 /**
  * Milestone 1 scaffold (thread-based).
@@ -38,6 +39,7 @@ private:
 	void load_parameters();
 
 	orb_advert_t _flow_angle_pub{nullptr};
+	orb_advert_t _debug_array_pub{nullptr};   // mirror to QGC via DEBUG_FLOAT_ARRAY
 
 	int32_t _sim_en{1};
 	float   _rate_hz{50.f};

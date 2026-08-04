@@ -5,6 +5,9 @@
 #include <px4_platform_common/posix.h>
 #include <errno.h>
 #include <math.h>
+#include <string.h>
+
+static constexpr float RAD2DEG = 57.29578f;
 
 void FlowAngle::load_parameters()
 {
@@ -91,11 +94,33 @@ void FlowAngle::run()
 			orb_publish(ORB_ID(sensor_flow_angle), _flow_angle_pub, &out);
 		}
 
+		// Mirror alpha/beta/airspeed to a debug_array so they appear live in
+		// QGC's MAVLink Inspector (streamed as DEBUG_FLOAT_ARRAY by default).
+		// Live view only -- independent of logging.
+		debug_array_s dbg{};
+		dbg.timestamp = out.timestamp;
+		dbg.id = 0;
+		strncpy(dbg.name, "flow", sizeof(dbg.name));
+		dbg.data[0] = out.alpha_rad * RAD2DEG;   // alpha [deg]
+		dbg.data[1] = out.beta_rad  * RAD2DEG;   // beta  [deg]
+		dbg.data[2] = out.true_airspeed_m_s;     // TAS   [m/s]
+
+		if (_debug_array_pub == nullptr) {
+			_debug_array_pub = orb_advertise(ORB_ID(debug_array), &dbg);
+
+		} else {
+			orb_publish(ORB_ID(debug_array), _debug_array_pub, &dbg);
+		}
+
 		px4_usleep(interval_us);
 	}
 
 	if (_flow_angle_pub != nullptr) {
 		orb_unadvertise(_flow_angle_pub);
+	}
+
+	if (_debug_array_pub != nullptr) {
+		orb_unadvertise(_debug_array_pub);
 	}
 }
 

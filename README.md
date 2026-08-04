@@ -74,50 +74,57 @@ out-of-tree build, the custom message, and publication all work.
 
 ## Confirm logging + telemetry
 
-- **Logging:** `sensor_flow_angle` is a normal advertised topic. Start logging
-  (`logger start` or arm) and confirm the topic appears in the ulog. To have it
-  logged by default without editing in-tree `logged_topics.cpp`, the
-  version-robust route is to also bridge alpha/beta through an existing debug
-  message (`debug_array` -> `DEBUG_FLOAT_ARRAY`), which is logged and streamed to
-  the GCS automatically. That bridge is a milestone-1b add.
+- **Logging:** `tools/patch_px4.py` adds `sensor_flow_angle` to the logger's
+  default set (a one-line `add_topic(...)` in `add_default_topics()`), so it lands
+  in the ulog alongside the standard topics. Flight Review has no plot for a custom
+  topic, but the data is in the ulog — use PlotJuggler or pyulog (`ulog2csv`) to
+  pull `sensor_flow_angle` for analysis.
+- **Live view in QGC:** the driver also publishes a `debug_array` (name `"flow"`,
+  `data[0]=alpha°`, `data[1]=beta°`, `data[2]=TAS`), which PX4 streams as
+  `DEBUG_FLOAT_ARRAY` by default — visible in QGC's MAVLink Inspector, no custom
+  dialect needed. This is live view only; it only reaches the ulog if `SDLOG_PROFILE`
+  includes the debug bit, which is why logging uses the real topic (above) instead.
 - **Startup on hardware (later):** start the module from the SD card's extras
   startup script rather than editing ROMFS, e.g. add `flow_angle start` to
   `/fs/microsd/etc/extras.txt` — keeps boot config out of the firmware image.
 
-## REQUIRED: reorder the external-modules block in PX4's root CMake
+## PX4-tree patches (tools/patch_px4.py)
 
-This is not optional even for milestone 1. In v1.17 PX4 configures external
-modules (root CMake ~L405-414) **before** `platforms/` (~L428) and `src/lib`
-(~L425). But `px4_add_module` links every module against `px4_platform`, which is
-what supplies the `px4_platform_common` include directories. At external-module
-configure time that target doesn't exist yet, so CMake silently degrades it to a
-bare link flag, drops the includes, and the module compiles without `ModuleBase`
-visible — the symptom is:
+Two small, content-matched, idempotent edits to your PX4 checkout, applied with:
 
-    error: expected template-name before '<' token
-    class FlowAngle : public ModuleBase<FlowAngle>
+    python3 tools/patch_px4.py /home/mattmccrink/PX4-Autopilot
 
-The fix is a one-block move of the external-modules `add_subdirectory` section to
-just after the in-tree module loop (so `platforms/`, `src/lib`, and the in-tree
-drivers all exist first, and it's still ahead of the events/metadata/parameters
-libs that scan module sources). Apply with the bundled script:
+1. **External-modules reorder** (root `CMakeLists.txt`). PX4 configures external
+   modules before `src/lib` and the in-tree drivers, so an external module can't
+   `DEPENDS` on `px4_work_queue` / `drivers__device` — those targets don't exist
+   yet at configure time. The patch moves the external-modules block to just after
+   the in-tree module loop (still ahead of the events/metadata/parameters libs that
+   scan module sources). Milestone 1 (thread-based, no DEPENDS) compiles without it
+   on a clean `v1.17.0`; milestone 2's `I2CSPIDriver` needs it.
+2. **Log topic** (`src/modules/logger/logged_topics.cpp`). Adds
+   `add_topic("sensor_flow_angle", 100)` to `add_default_topics()` so the topic is
+   recorded in the onboard ulog alongside the standard set.
 
-    python3 tools/patch_px4_external_order.py \
-        /home/mattmccrink/PX4-Autopilot/CMakeLists.txt
+Both re-apply cleanly after bumping PX4 to a new tag — keep this in your build
+script. Checking out a tag resets `CMakeLists.txt`, so re-run the script after any
+`git checkout`.
 
-It's content-matched and idempotent, so it's safe to re-run and to re-apply after
-bumping PX4 to a new tag — keep it in your build script. This is the "PX4 plus one
-documented patch" cost of an out-of-tree module; it also makes milestone 2's
-`DEPENDS px4_work_queue drivers__device` resolve, since those targets now exist
-when the external module is configured.
+> A `ModuleBase` "expected template-name" error is NOT a reason to touch these
+> patches: that specific error means the PX4 checkout is on `main`/beta instead of
+> the `v1.17.0` tag (the beta refactored the `ModuleBase` template out of
+> `module.h`). Pin the submodule to the tag. See "One-time setup" above.
 
 Two other choices in this scaffold that keep it robust:
 
 - Milestone 1 is a **thread-based `ModuleBase`** (`px4_task_spawn_cmd` + `run()`),
   no `DEPENDS` needed — mirrors `src/templates/template_module`.
-- Params use raw `param_find` / `param_get` (not `DEFINE_PARAMETERS`), so the
-  module runs even if the external param scan doesn't register `FA_*`. Check with
-  `param show FA_RATE` in nsh; if missing, it runs on the built-in defaults.
+- **Params are deferred to milestone 2.** In-tree `*_params.c` files use
+  `PARAM_DEFINE_*` with no includes, relying on a build-provided force-include that
+  isn't applied to external-module sources (compiling one there fails with
+  `expected ')' before numeric constant`). Milestone 1 runs on compiled-in defaults
+  (`FA_SIM_EN=1`, 50 Hz); `load_parameters()` already probes for `FA_*` via
+  `param_find` and falls back cleanly, so params drop in later via `module.yaml`
+  with no code change to the run loop.
 
 ## Milestones
 

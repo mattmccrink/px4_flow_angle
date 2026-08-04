@@ -3,10 +3,9 @@ px4_add_module(
 	MAIN flow_angle
 	SRCS
 		FlowAngle.cpp
-	# No DEPENDS: external modules are configured before src/lib, so depending on
-	# a src/lib target (e.g. px4_work_queue) fails with "non-existent target".
-	# A thread-based ModuleBase needs no such dependency. The I2CSPIDriver refactor
-	# in milestone 2 will need drivers__device / px4_work_queue, which forces a
-	# small, documented reorder patch to the PX4 root CMakeLists (see README).
+	# No DEPENDS: thread-based ModuleBase needs no src/lib target.
+	# Params are deferred to milestone 2 (module.yaml): in-tree *_params.c relies on
+	# a build-provided force-include for PARAM_DEFINE_* that isn't applied to
+	# external-module sources, so milestone 1 runs on compiled-in defaults instead.
 	EXTERNAL
 )
