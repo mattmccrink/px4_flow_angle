@@ -1,0 +1,122 @@
+module_name: Flow Angle (5-hole probe)
+
+parameters:
+  - group: Flow Angle
+    definitions:
+      FA_SIM_EN:
+        description:
+          short: Synthetic (hardware-less) mode
+          long: |
+            When enabled the driver publishes a synthetic alpha/beta sweep and
+            does no I2C traffic. Regression path for SITL. Set 0 for hardware.
+        type: boolean
+        default: 1
+
+      FA_RATE:
+        description:
+          short: Sample rate
+        type: float
+        unit: Hz
+        min: 1.0
+        max: 200.0
+        decimal: 1
+        default: 50.0
+
+      FA_Q_MIN:
+        description:
+          short: Minimum dynamic pressure for a valid angle
+          long: |
+            Below this q the alpha/beta reduction is gated off (division by a tiny
+            q blows up angle noise). sensor_flow_angle.valid is false below it.
+        type: float
+        unit: Pa
+        decimal: 1
+        default: 20.0
+
+      FA_RHO:
+        description:
+          short: Air density for TAS
+        type: float
+        unit: kg/m^3
+        decimal: 3
+        default: 1.225
+
+      FA_OUT_TYP:
+        description:
+          short: MS4515DO output type
+          long: 0 = type A (10-90%), 1 = type B (5-95%). The populated parts are B.
+        type: enum
+        values:
+          0: Type A (10-90%)
+          1: Type B (5-95%)
+        default: 1
+
+      # --- placeholder reduction gains (milestone 3 replaces with the tunnel map) ---
+      FA_CAL_A:
+        description:
+          short: Alpha reduction gain (placeholder)
+          long: alpha ~= FA_CAL_A * dp_alpha / q. Stand-in until the Calspan map lands.
+        type: float
+        decimal: 4
+        default: 1.0
+
+      FA_CAL_B:
+        description:
+          short: Beta reduction gain (placeholder)
+        type: float
+        decimal: 4
+        default: 1.0
+
+  - group: Flow Angle Wiring
+    definitions:
+      # channel = PCA9545A channel index 0..3 (driver forms the select byte 1<<ch)
+      FA_A_CH:
+        description: {short: Alpha mux channel}
+        type: int32
+        min: 0
+        max: 3
+        default: 0
+      FA_AS_CH:
+        description: {short: Airspeed mux channel}
+        type: int32
+        min: 0
+        max: 3
+        default: 1
+      FA_B_CH:
+        description: {short: Beta mux channel}
+        type: int32
+        min: 0
+        max: 3
+        default: 2
+
+      # sensor 7-bit I2C address behind the mux; all three parts are marked "3BK"
+      # -> interface K -> 0x46 (=70 dec). Confirmed off the physical packages.
+      FA_A_ADDR:
+        description: {short: Alpha sensor I2C address (dec)}
+        type: int32
+        default: 70
+      FA_AS_ADDR:
+        description: {short: Airspeed sensor I2C address (dec)}
+        type: int32
+        default: 70
+      FA_B_ADDR:
+        description: {short: Beta sensor I2C address (dec)}
+        type: int32
+        default: 70
+
+      # +full-scale range in inH2O; differential parts are treated bidirectional (+/-)
+      FA_A_RNG:
+        description: {short: Alpha sensor full-scale, inH2O}
+        type: float
+        decimal: 1
+        default: 4.0
+      FA_AS_RNG:
+        description: {short: Airspeed sensor full-scale, inH2O}
+        type: float
+        decimal: 1
+        default: 20.0
+      FA_B_RNG:
+        description: {short: Beta sensor full-scale, inH2O}
+        type: float
+        decimal: 1
+        default: 4.0

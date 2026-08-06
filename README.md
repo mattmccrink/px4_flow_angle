@@ -135,3 +135,108 @@ Two other choices in this scaffold that keep it robust:
    stock airspeed -> EKF2 path) and `sensor_flow_angle` for the reduction.
 3. Bench + tunnel validation against the Calspan-calibrated map; calibration
    coefficients loaded from params so recal never needs a recompile.
+
+## Milestone 2 — hardware driver (bench bring-up)
+
+The module is now an `I2CSPIDriver` that owns a **PCA9545A** I2C switch and three
+**MS4515DO** sensors behind it. The milestone-1 `flow_angle_params.c` is gone —
+parameters live in `module.yaml` — and there is a new `flow_angle_main.cpp`
+(command dispatch + bus instantiation). `FlowAngle.{hpp,cpp}` are the driver.
+
+### Confirmed hardware (this board)
+
+- Bus: **I2C4** on a Pixhawk 4; the mux enumerates at **0x70** (A1=A0=GND).
+- Three sensors, one per switch channel, all sharing address **0x46**:
+
+  | channel | role     | select byte | I2C addr | sensor |
+  |:-------:|----------|:-----------:|:--------:|--------|
+  | 0       | alpha    | 0x01        | 0x46     | MS4515DO, +/-4 inH2O differential, type B |
+  | 1       | airspeed | 0x02        | 0x46     | MS4515DO, +/-20 inH2O differential, type B |
+  | 2       | beta     | 0x04        | 0x46     | MS4515DO, +/-4 inH2O differential, type B |
+
+  All three are marked `3BK` = 3.3V / output type B (5-95%) / interface K (0x46).
+  Three identical addresses is exactly what the mux disambiguates. Read this off
+  the physical package, not the Digikey ordering string (which drifted).
+
+### How it reads the bus
+
+The driver registers at the mux address (0x70) and retargets to a sensor address
+with `set_device_address()` per transaction — one driver owns switch + sensors.
+Each cycle, for every channel: write the select byte to the PCA9545A, issue a
+Read-MR, wait `CONVERSION_INTERVAL` for the conversion, then Read-DF4 and decode
+(14-bit bridge + 11-bit temp, lifted from the in-tree `ms4525do`, type-B constants).
+The uniform MR->delay->DF path is what the Low-Power airspeed variant needs and is
+harmless to the free-running parts.
+
+PX4 serializes every driver on a bus onto one work queue (`wq:I2C4`), so the module
+coexists with other I2C devices with no core changes and no locking.
+
+Publications: `differential_pressure` (pitot only -> stock airspeed selector ->
+EKF2), `sensor_flow_angle` (alpha/beta + q + TAS + raw diffs), and a `debug_array`
+named `flow` (alpha deg / beta deg / TAS) for live QGC viewing.
+
+> The alpha/beta reduction is a **placeholder** (`alpha = FA_CAL_A * dp_alpha / q`).
+> The real Calspan tunnel map is milestone 3 and drops into `publish_cycle()` +
+> the `FA_CAL_*` params with no change to the read loop.
+
+### Build
+
+```bash
+python3 tools/patch_px4.py /path/to/PX4-Autopilot   # required: reorder + log topic
+cd PX4-Autopilot
+make px4_fmu-v5_default EXTERNAL_MODULES_LOCATION=$PWD/../px4_flow_angle
+```
+
+Milestone 2 depends on the CMake reorder patch (external module `DEPENDS
+px4_work_queue drivers__device` must resolve). Re-run `patch_px4.py` after any
+`git checkout` of the PX4 tree.
+
+### Bring-up
+
+```
+pxh> param set FA_SIM_EN 0
+pxh> flow_angle start -b 4 -a 0x70 -f 400
+pxh> flow_angle scan
+pxh> flow_angle status
+pxh> listener sensor_flow_angle
+```
+
+`flow_angle scan` sweeps all four channels against {0x28, 0x36, 0x46, 0x48} on the
+driver's own work queue (serialized against sampling, no mux race). Expected
+signature for this board:
+
+```
+ ch  addr  MR   status   counts
+  0   0x46  ACK  Normal   ~8192
+  1   0x46  ACK  Normal   ~8192
+  2   0x46  ACK  Normal   ~8192
+  (every other cell: --, ch3 entirely --)
+```
+
+Zero-flow counts sit near mid-scale (~8192) because the parts are bidirectional
+differential. Sanity check each angle channel with a syringe: suction on one
+alpha port should drive its `dp_alpha_pa` **negative through the zero offset** —
+a gage part would instead sit near zero and rail. Trust the raw `dp_alpha_pa` /
+`dp_beta_pa` / `dynamic_pressure_pa` in `sensor_flow_angle` before believing any
+computed angle.
+
+If a channel reads `Stale` where `Normal` is expected, the Low-Power airspeed part
+needs more settling — raise `CONVERSION_INTERVAL` in `FlowAngle.hpp`.
+
+### Parameters (module.yaml)
+
+`FA_SIM_EN` (synthetic, no-bus regression), `FA_RATE`, `FA_Q_MIN`, `FA_RHO`,
+`FA_OUT_TYP` (0=A / 1=B), `FA_CAL_A` / `FA_CAL_B` (placeholder reduction gains),
+and the wiring group `FA_{A,AS,B}_CH` / `FA_{A,AS,B}_ADDR` / `FA_{A,AS,B}_RNG`
+(channel index, I2C address in decimal, and full-scale in inH2O per sensor). A
+wiring or range change is a param edit, not a recompile.
+
+### FA_SIM_EN vs the SITL smoke test
+
+`init()` is sim-aware: with `FA_SIM_EN=1` it never opens the bus or probes the mux,
+it just synthesizes `sensor_flow_angle` at `FA_RATE`. Because M2 is a bus-bound
+`I2CSPIDriver`, an instance is only created if `module_start` finds a bindable I2C
+bus. On the flight controller that is always true (start with `FA_SIM_EN 1`, no
+sensors needed). Under pure SITL it depends on the target exposing an I2C bus — if
+`sihsim` doesn't, run the synthetic regression on the FC rather than in SITL. This
+is the one behavioural difference from the milestone-1 thread-based module.

@@ -1,9 +1,13 @@
-# PX4 builds external modules by doing:
-#   add_subdirectory("${EXTERNAL_MODULES_LOCATION}/src" external_modules)
-# so THIS file (src/CMakeLists.txt) is where config_module_list_external must be
-# set. PARENT_SCOPE pushes it up to the root CMake scope, which then iterates the
-# list and add_subdirectory()s each entry, relative to this src/ directory.
+# External module list for this out-of-tree repo.
+#
+# The root CMakeLists.txt (v1.17.0) add_subdirectory()'s this file, then for each
+# entry below does add_subdirectory(${EXTERNAL_MODULES_LOCATION}/src/<entry>), so
+# list module paths relative to this src/ directory. PARENT_SCOPE is required.
+#
+# NOTE: on v1.17.0 this must live in src/CMakeLists.txt (not a repo-root
+# CMakeLists.txt); the root build reads config_module_list_external from here.
+
 set(config_module_list_external
 	modules/flow_angle
 	PARENT_SCOPE
-)
+	)
