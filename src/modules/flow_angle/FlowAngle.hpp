@@ -2,6 +2,10 @@
 
 #define MODULE_NAME "flow_angle"
 
+// Bump this on every released tarball. Printed on start, in `flow_angle status`,
+// and in the usage text; grep-able in source to confirm which tree is in play.
+#define FLOW_ANGLE_VERSION "0.2.1"
+
 #include <drivers/drv_hrt.h>
 #include <lib/drivers/device/i2c.h>
 #include <lib/perf/perf_counter.h>

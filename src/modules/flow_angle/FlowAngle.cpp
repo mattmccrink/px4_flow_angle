@@ -84,6 +84,8 @@ int FlowAngle::init()
 {
 	load_parameters(); // read FA_SIM_EN (and the rest) before deciding to touch the bus
 
+	PX4_INFO("flow_angle v" FLOW_ANGLE_VERSION " starting (%s)", _sim_en ? "SIM" : "HW");
+
 	if (_sim_en != 0) {
 		// Hardware-less regression path: never open the bus or probe the mux, just
 		// synthesize. Runs even on an FC with nothing wired to this bus.
@@ -439,7 +441,7 @@ void FlowAngle::print_status()
 {
 	I2CSPIDriverBase::print_status();
 
-	PX4_INFO("mode: %s, rate: %.1f Hz, q_min: %.1f Pa, mux: 0x%02x",
+	PX4_INFO("flow_angle v" FLOW_ANGLE_VERSION " | mode: %s, rate: %.1f Hz, q_min: %.1f Pa, mux: 0x%02x",
 		 _sim_en ? "SIM" : "HW", (double)_rate_hz, (double)_q_min, (unsigned)_mux_addr);
 
 	for (int i = 0; i < N_CH; i++) {

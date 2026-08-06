@@ -18,6 +18,7 @@ static constexpr uint32_t I2C_SPEED           = 400 * 1000; // 400 kHz
 void FlowAngle::print_usage()
 {
 	PRINT_MODULE_DESCRIPTION(
+		"flow_angle driver v" FLOW_ANGLE_VERSION "\n"
 		R"DESCR_STR(
 ### Description
 Five-hole probe flow-angle driver: one PCA9545A I2C switch + three MS4515DO
