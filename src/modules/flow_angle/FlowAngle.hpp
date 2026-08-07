@@ -4,7 +4,7 @@
 
 // Bump this on every released tarball. Printed on start, in `flow_angle status`,
 // and in the usage text; grep-able in source to confirm which tree is in play.
-#define FLOW_ANGLE_VERSION "0.2.2"
+#define FLOW_ANGLE_VERSION "0.2.3"
 
 #include <drivers/drv_hrt.h>
 #include <lib/drivers/device/i2c.h>
@@ -95,6 +95,19 @@ private:
 		Fault    = 0b11,
 	};
 
+	enum class FrameResult : uint8_t {  // outcome of one decode+validate
+		Ok = 0,
+		Comms,      // I2C transfer failed
+		Fault,      // status bits = Fault
+		Stale,      // status bits not Normal (Stale/Reserved) -> reject, do not trust
+		OutOfRange, // decoded pressure outside the sensor's physical range
+	};
+
+	// On a rejected frame, re-issue MR->convert->DF up to this many extra times
+	// before giving up on the channel this cycle. Targets low-power parts that can
+	// hand back a stale/max register on a first fetch.
+	static constexpr int MAX_REREADS = 2;
+
 	struct ChannelCfg {
 		uint8_t mux_bit;   // PCA9545A control byte: 1 << channel (0x01/0x02/0x04)
 		uint8_t addr;      // sensor 7-bit I2C address behind the mux
@@ -112,7 +125,9 @@ private:
 	void  load_parameters();
 	void  run_sim();                                   // FA_SIM_EN synthetic path
 	int   mux_select(uint8_t mux_bit);                 // write control byte to PCA9545A
-	bool  read_frame(const ChannelCfg &c, ChannelSample &out); // decode one DF4 frame
+	FrameResult read_frame(const ChannelCfg &c, ChannelSample &out, uint8_t raw[4]); // decode+validate one DF4 frame
+	void  read_channel(int idx);                       // full read w/ stale-reject + bounded re-read
+	void  log_raw(int idx, const uint8_t raw[4], FrameResult r, int tries); // rate-limited raw-byte dump
 	float transfer_fn(int16_t bridge, float p_min_pa, float p_max_pa) const;
 	void  publish_cycle();
 	void  schedule_next_cycle();
@@ -139,6 +154,9 @@ private:
 
 	// tunables (params)
 	int32_t _sim_en{0};   // default HW; FA_SIM_EN=1 (param) re-enables the synthetic path
+	int32_t _dbg_raw{0};  // FA_DBG_RAW=1 -> dump raw 4-byte frames (rate-limited)
+	uint8_t _last_tries[N_CH] {};   // re-reads needed on the last cycle, per channel
+	hrt_abstime _last_dbg{0};       // raw-log rate limiter
 	float   _rate_hz{50.f};
 	float   _q_min{20.f};
 	float   _rho{1.225f};
@@ -154,4 +172,7 @@ private:
 	perf_counter_t _sample_perf{perf_alloc(PC_ELAPSED, MODULE_NAME": read")};
 	perf_counter_t _comms_errors{perf_alloc(PC_COUNT, MODULE_NAME": comms errors")};
 	perf_counter_t _fault_perf{perf_alloc(PC_COUNT, MODULE_NAME": sensor faults")};
+	perf_counter_t _reject_perf{perf_alloc(PC_COUNT, MODULE_NAME": frames rejected")};
+	perf_counter_t _reread_perf{perf_alloc(PC_COUNT, MODULE_NAME": cycles needing re-read")};
+	perf_counter_t _stale_perf{perf_alloc(PC_COUNT, MODULE_NAME": channels dropped (stale)")};
 };

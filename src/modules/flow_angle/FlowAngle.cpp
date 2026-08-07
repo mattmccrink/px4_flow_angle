@@ -23,6 +23,9 @@ FlowAngle::~FlowAngle()
 	perf_free(_sample_perf);
 	perf_free(_comms_errors);
 	perf_free(_fault_perf);
+	perf_free(_reject_perf);
+	perf_free(_reread_perf);
+	perf_free(_stale_perf);
 }
 
 void FlowAngle::load_parameters()
@@ -37,6 +40,7 @@ void FlowAngle::load_parameters()
 	};
 
 	get_i("FA_SIM_EN", _sim_en);
+	get_i("FA_DBG_RAW", _dbg_raw);
 	get_f("FA_RATE",   _rate_hz);
 	get_f("FA_Q_MIN",  _q_min);
 	get_f("FA_RHO",    _rho);
@@ -161,35 +165,122 @@ float FlowAngle::transfer_fn(int16_t bridge, float p_min_pa, float p_max_pa) con
 	       / (_out_span * FULL_SCALE) + p_min_pa;
 }
 
-bool FlowAngle::read_frame(const ChannelCfg &c, ChannelSample &out)
+FlowAngle::FrameResult FlowAngle::read_frame(const ChannelCfg &c, ChannelSample &out, uint8_t raw[4])
 {
 	// mux already selected for this channel; retarget to the sensor and fetch 4 bytes.
 	set_device_address(c.addr);
 
-	uint8_t d[4] {};
+	raw[0] = raw[1] = raw[2] = raw[3] = 0;
 
-	if (transfer(nullptr, 0, d, sizeof(d)) != PX4_OK) {
+	if (transfer(nullptr, 0, raw, 4) != PX4_OK) {
 		perf_count(_comms_errors);
-		out.ok = false;
-		return false;
+		return FrameResult::Comms;
 	}
 
-	const uint8_t status = (d[0] & 0b1100'0000) >> 6;
+	const uint8_t status = (raw[0] & 0b1100'0000) >> 6;
 
 	if (status == (uint8_t)Status::Fault) {
 		perf_count(_fault_perf);
-		out.ok = false;
-		return false;
+		return FrameResult::Fault;
 	}
 
-	// accept Normal (fresh) and Stale (valid but re-fetched) frames
-	const int16_t bridge = ((d[0] & 0b0011'1111) << 8) | d[1];
-	const int16_t temp11 = ((d[2] << 8) + (0b1110'0000 & d[3])) / (1 << 5);
+	// Only a Normal frame carries fresh, trustworthy data. A Stale/Reserved frame
+	// means we fetched before the (low-power) part finished -- its pressure field
+	// is old/uninitialized (this is the "frozen 5529 Pa" bug). Reject, don't latch.
+	if (status != (uint8_t)Status::Normal) {
+		return FrameResult::Stale;
+	}
 
-	out.press_pa = transfer_fn(bridge, c.p_min_pa, c.p_max_pa);
+	const int16_t bridge = ((raw[0] & 0b0011'1111) << 8) | raw[1];
+	const int16_t temp11 = ((raw[2] << 8) + (0b1110'0000 & raw[3])) / (1 << 5);
+	const float press = transfer_fn(bridge, c.p_min_pa, c.p_max_pa);
+
+	// Physical-range backstop: a stale/garbage register (e.g. a near-0xFFFF bridge)
+	// decodes to a pressure beyond the sensor's full scale -- impossible, so reject
+	// even though the status bits claimed Normal. Small tolerance for rail noise.
+	const float tol = 0.02f * (c.p_max_pa - c.p_min_pa);
+
+	if (press < c.p_min_pa - tol || press > c.p_max_pa + tol) {
+		return FrameResult::OutOfRange;
+	}
+
+	out.press_pa = press;
 	out.temp_c   = (200.f * temp11) / 2047.f - 50.f;
-	out.ok       = true;
-	return true;
+	return FrameResult::Ok;
+}
+
+static const char *result_str(FlowAngle::FrameResult r)
+{
+	switch (r) {
+	case FlowAngle::FrameResult::Ok:         return "ok";
+	case FlowAngle::FrameResult::Comms:      return "comms";
+	case FlowAngle::FrameResult::Fault:      return "fault";
+	case FlowAngle::FrameResult::Stale:      return "stale";
+	case FlowAngle::FrameResult::OutOfRange: return "out-of-range";
+	}
+
+	return "?";
+}
+
+void FlowAngle::log_raw(int idx, const uint8_t raw[4], FrameResult r, int tries)
+{
+	const hrt_abstime now = hrt_absolute_time();
+
+	if (now - _last_dbg < 250_ms) { return; }   // ~4 Hz cap so the shell stays readable
+
+	_last_dbg = now;
+
+	const uint16_t bridge = ((raw[0] & 0x3F) << 8) | raw[1];
+	PX4_INFO("ch%d raw=%02x %02x %02x %02x st=%u bridge=%u -> %s (tries=%d)",
+		 idx, raw[0], raw[1], raw[2], raw[3], (unsigned)((raw[0] >> 6) & 0x3),
+		 (unsigned)bridge, result_str(r), tries);
+}
+
+void FlowAngle::read_channel(int idx)
+{
+	const ChannelCfg &c = _cfg[idx];
+	uint8_t raw[4] {};
+
+	// First attempt uses the measurement request already issued in MEASURE.
+	mux_select(c.mux_bit);
+	FrameResult r = read_frame(c, _samp[idx], raw);
+
+	int tries = 0;
+
+	// On a rejected frame, take a fresh measurement (MR -> convert -> DF) and retry.
+	// A bare DF re-fetch would return the same stale register on a low-power part,
+	// so each retry re-issues the measurement request.
+	while (r != FrameResult::Ok && tries < MAX_REREADS) {
+		perf_count(_reject_perf);
+		tries++;
+
+		if (mux_select(c.mux_bit) != PX4_OK) { r = FrameResult::Comms; continue; }
+
+		set_device_address(c.addr);
+		uint8_t mr = ADDR_READ_MR;
+
+		if (transfer(&mr, 1, nullptr, 0) != PX4_OK) { r = FrameResult::Comms; continue; }
+
+		px4_usleep(CONVERSION_INTERVAL);
+		mux_select(c.mux_bit);
+		r = read_frame(c, _samp[idx], raw);
+	}
+
+	_last_tries[idx] = (uint8_t)tries;
+
+	if (r == FrameResult::Ok) {
+		_samp[idx].ok = true;
+
+		if (tries > 0) { perf_count(_reread_perf); }
+
+		if (_dbg_raw) { log_raw(idx, raw, r, tries); }
+
+	} else {
+		// exhausted: never latch a bad frame -- drop the channel this cycle
+		_samp[idx].ok = false;
+		perf_count(_stale_perf);
+		log_raw(idx, raw, r, tries);   // always surface a fully-failed channel
+	}
 }
 
 const FlowAngle::ChannelSample *FlowAngle::sample_for(Role r) const
@@ -262,10 +353,8 @@ void FlowAngle::RunImpl()
 		}
 
 	case Phase::READ: {
-			// re-select the channel every transaction (belt-and-suspenders: we own
-			// the mux, but this survives a future second mux user or a stale latch)
-			mux_select(c.mux_bit);
-			read_frame(c, _samp[_ch_idx]);
+			// stale-reject + bounded re-read; read_channel owns its mux selects
+			read_channel(_ch_idx);
 
 			_phase = Phase::MEASURE;
 
@@ -446,13 +535,16 @@ void FlowAngle::print_status()
 
 	for (int i = 0; i < N_CH; i++) {
 		const ChannelCfg &c = _cfg[i];
-		PX4_INFO("  ch%u role=%u addr=0x%02x P[%.0f..%.0f]Pa last=%.2fPa %s",
+		PX4_INFO("  ch%u role=%u addr=0x%02x P[%.0f..%.0f]Pa last=%.2fPa %s (retries=%u)",
 			 (unsigned)__builtin_ctz(c.mux_bit), (unsigned)c.role, (unsigned)c.addr,
 			 (double)c.p_min_pa, (double)c.p_max_pa,
-			 (double)_samp[i].press_pa, _samp[i].ok ? "ok" : "--");
+			 (double)_samp[i].press_pa, _samp[i].ok ? "ok" : "--", (unsigned)_last_tries[i]);
 	}
 
 	perf_print_counter(_sample_perf);
 	perf_print_counter(_comms_errors);
+	perf_print_counter(_reject_perf);
+	perf_print_counter(_reread_perf);
+	perf_print_counter(_stale_perf);
 	perf_print_counter(_fault_perf);
 }

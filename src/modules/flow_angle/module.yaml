@@ -13,6 +13,16 @@ parameters:
         type: boolean
         default: 0
 
+      FA_DBG_RAW:
+        description:
+          short: Dump raw sensor frames (debug)
+          long: |
+            When 1, logs the raw 4-byte MS4515DO frame (hex), status bits, bridge
+            counts and decode result per channel, rate-limited to ~4 Hz. Fully
+            rejected channels are logged regardless of this flag. Leave 0 normally.
+        type: boolean
+        default: 0
+
       FA_RATE:
         description:
           short: Sample rate
