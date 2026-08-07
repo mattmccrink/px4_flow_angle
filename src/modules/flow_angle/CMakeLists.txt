@@ -33,6 +33,8 @@ px4_add_module(
 		flow_angle_main.cpp
 		FlowAngle.cpp
 		FlowAngle.hpp
+	MODULE_CONFIG
+		module.yaml
 	DEPENDS
 		px4_work_queue
 		drivers__device
