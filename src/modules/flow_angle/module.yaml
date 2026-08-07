@@ -8,9 +8,10 @@ parameters:
           short: Synthetic (hardware-less) mode
           long: |
             When enabled the driver publishes a synthetic alpha/beta sweep and
-            does no I2C traffic. Regression path for SITL. Set 0 for hardware.
+            does no I2C traffic. Opt-in regression path. Default 0 = read hardware;
+            set 1 for the SITL/no-hardware smoke test.
         type: boolean
-        default: 1
+        default: 0
 
       FA_RATE:
         description:
@@ -23,13 +24,16 @@ parameters:
         default: 50.0
 
       FA_Q_MIN:
+        # NOTE: PX4's param 'unit:' is whitelist-validated and does NOT include a
+        # bare 'Pa' (only 'hPa'). One invalid unit silently voids the WHOLE yaml,
+        # so no FA_* params generate. Pa is the driver's internal working unit, so
+        # the unit is kept in the description text rather than the (validated) field.
         description:
-          short: Minimum dynamic pressure for a valid angle
+          short: Minimum dynamic pressure for a valid angle (Pa)
           long: |
             Below this q the alpha/beta reduction is gated off (division by a tiny
             q blows up angle noise). sensor_flow_angle.valid is false below it.
         type: float
-        unit: Pa
         decimal: 1
         default: 20.0
 

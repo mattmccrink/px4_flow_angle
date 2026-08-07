@@ -4,7 +4,7 @@
 
 // Bump this on every released tarball. Printed on start, in `flow_angle status`,
 // and in the usage text; grep-able in source to confirm which tree is in play.
-#define FLOW_ANGLE_VERSION "0.2.1"
+#define FLOW_ANGLE_VERSION "0.2.2"
 
 #include <drivers/drv_hrt.h>
 #include <lib/drivers/device/i2c.h>
@@ -138,7 +138,7 @@ private:
 	float _out_span{0.9f};
 
 	// tunables (params)
-	int32_t _sim_en{1};
+	int32_t _sim_en{0};   // default HW; FA_SIM_EN=1 (param) re-enables the synthetic path
 	float   _rate_hz{50.f};
 	float   _q_min{20.f};
 	float   _rho{1.225f};
