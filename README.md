@@ -4,7 +4,7 @@ Out-of-tree PX4 driver for a five-hole probe: three **MS4515DO** digital pressur
 sensors behind a **PCA9545A** I²C switch, publishing angle-of-attack / sideslip
 (alpha/beta), dynamic pressure, and airspeed into the PX4 flight stack.
 
-**Version: 0.2.3** &nbsp;·&nbsp; **Target: PX4 v1.17.0, board `px4_fmu-v5_default` (Pixhawk 4)**
+**Version: 0.2.4** &nbsp;·&nbsp; **Target: PX4 v1.17.0, board `px4_fmu-v5_default` (Pixhawk 4)**
 
 This document takes you from a bare machine to a flashed, running driver. If you
 are a student picking this up: read the whole "Build from a clean checkout"
@@ -344,7 +344,7 @@ for a first hardware bring-up, and it means you're advancing through real layers
 
 ## 11. Version history
 
-- **0.2.3** — stale-frame rejection + bounded re-read on the low-power airspeed channel; physical-range backstop; `FA_DBG_RAW` raw-frame dump; per-channel `retries=` and reject/re-read/drop counters in `status`.
+- **0.2.4** — stale-frame rejection + bounded re-read on the low-power airspeed channel; physical-range backstop; `FA_DBG_RAW` raw-frame dump; per-channel `retries=` and reject/re-read/drop counters in `status`. (Supersedes 0.2.3, which had a member-scope compile error in `result_str`.)
 - **0.2.2** — params generate via `MODULE_CONFIG module.yaml`; `FA_Q_MIN` unit fix; HW default (`FA_SIM_EN` default 0).
 - **0.2.1** — out-of-tree compile-environment fix (`__PX4_NUTTX` + root includes re-applied in module CMakeLists).
 - **0.2.0** — version counter added; `scan` verb; all three sensors confirmed at 0x46; bus 4.

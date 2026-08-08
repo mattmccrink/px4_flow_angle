@@ -209,7 +209,7 @@ FlowAngle::FrameResult FlowAngle::read_frame(const ChannelCfg &c, ChannelSample 
 	return FrameResult::Ok;
 }
 
-static const char *result_str(FlowAngle::FrameResult r)
+const char *FlowAngle::result_str(FlowAngle::FrameResult r)
 {
 	switch (r) {
 	case FlowAngle::FrameResult::Ok:         return "ok";

@@ -4,7 +4,7 @@
 
 // Bump this on every released tarball. Printed on start, in `flow_angle status`,
 // and in the usage text; grep-able in source to confirm which tree is in play.
-#define FLOW_ANGLE_VERSION "0.2.3"
+#define FLOW_ANGLE_VERSION "0.2.4"
 
 #include <drivers/drv_hrt.h>
 #include <lib/drivers/device/i2c.h>
@@ -128,6 +128,7 @@ private:
 	FrameResult read_frame(const ChannelCfg &c, ChannelSample &out, uint8_t raw[4]); // decode+validate one DF4 frame
 	void  read_channel(int idx);                       // full read w/ stale-reject + bounded re-read
 	void  log_raw(int idx, const uint8_t raw[4], FrameResult r, int tries); // rate-limited raw-byte dump
+	static const char *result_str(FrameResult r);      // frame-result name for logs
 	float transfer_fn(int16_t bridge, float p_min_pa, float p_max_pa) const;
 	void  publish_cycle();
 	void  schedule_next_cycle();
