@@ -4,7 +4,7 @@
 
 // Bump this on every released tarball. Printed on start, in `flow_angle status`,
 // and in the usage text; grep-able in source to confirm which tree is in play.
-#define FLOW_ANGLE_VERSION "0.2.5"
+#define FLOW_ANGLE_VERSION "0.2.6"
 
 #include <drivers/drv_hrt.h>
 #include <lib/drivers/device/i2c.h>
@@ -81,9 +81,9 @@ private:
 	// 14-bit full scale
 	static constexpr float FULL_SCALE = 16383.f;
 
-	// Conversion wait between Read-MR and Read-DF. Reference ms4525do uses 2 ms;
-	// nudged up for the Low-Power airspeed part's wake+convert. Tune on the bench.
-	static constexpr hrt_abstime CONVERSION_INTERVAL{2500};
+	// Post-MR conversion wait and MR style are runtime params now (FA_CONV_US,
+	// FA_MR_MODE) -- a low-power part can need a longer wake and/or an address-only
+	// measurement request. See _conv_us / _mr_mode below.
 
 	enum class Role : uint8_t { ALPHA = 0, PITOT = 1, BETA = 2 };
 
@@ -126,6 +126,7 @@ private:
 	void  load_parameters();
 	void  run_sim();                                   // FA_SIM_EN synthetic path
 	int   mux_select(uint8_t mux_bit);                 // write control byte to PCA9545A
+	int   send_mr(uint8_t addr);                       // issue a measurement request (mode-dependent)
 	FrameResult read_frame(const ChannelCfg &c, ChannelSample &out, uint8_t raw[4]); // decode+validate one DF4 frame
 	void  read_channel(int idx);                       // full read w/ stale-reject + bounded re-read
 	void  log_raw(int idx, const uint8_t raw[4], FrameResult r, int tries); // rate-limited raw-byte dump
@@ -160,6 +161,8 @@ private:
 	// tunables (params)
 	int32_t _sim_en{0};   // default HW; FA_SIM_EN=1 (param) re-enables the synthetic path
 	int32_t _dbg_raw{0};  // FA_DBG_RAW=1 -> dump raw 4-byte frames (rate-limited)
+	uint32_t _conv_us{5000};  // FA_CONV_US: post-MR conversion/wake wait [us]
+	int32_t _mr_mode{0};      // FA_MR_MODE: 0 = 1-byte 0x00 write, 1 = address-only write
 	uint8_t _last_tries[N_CH] {};   // re-reads needed on the last cycle, per channel
 	hrt_abstime _last_dbg{0};       // raw-log rate limiter
 	float   _rate_hz{50.f};

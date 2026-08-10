@@ -41,6 +41,14 @@ void FlowAngle::load_parameters()
 
 	get_i("FA_SIM_EN", _sim_en);
 	get_i("FA_DBG_RAW", _dbg_raw);
+	get_i("FA_MR_MODE", _mr_mode);
+
+	int32_t conv = (int32_t)_conv_us;
+	get_i("FA_CONV_US", conv);
+	if (conv < 500)    { conv = 500; }
+	if (conv > 100000) { conv = 100000; }
+	_conv_us = (uint32_t)conv;
+
 	get_f("FA_RATE",   _rate_hz);
 	get_f("FA_Q_MIN",  _q_min);
 	get_f("FA_RHO",    _rho);
@@ -113,9 +121,7 @@ int FlowAngle::init()
 		bool ok = false;
 
 		if (mux_select(c.mux_bit) == PX4_OK) {
-			set_device_address(c.addr);
-			uint8_t mr = ADDR_READ_MR;
-			ok = (transfer(&mr, 1, nullptr, 0) == PX4_OK);
+			ok = (send_mr(c.addr) == PX4_OK);
 		}
 
 		PX4_INFO("ch%u (0x%02x) role=%u addr=0x%02x range=+/-%.0f Pa : %s",
@@ -154,6 +160,21 @@ int FlowAngle::mux_select(uint8_t mux_bit)
 {
 	set_device_address(_mux_addr);
 	return transfer(&mux_bit, 1, nullptr, 0);
+}
+
+int FlowAngle::send_mr(uint8_t addr)
+{
+	// Measurement request to trigger a conversion. Mode 0 writes a 0x00 data byte
+	// (works for free-running parts, matches the in-tree ms4525do). Mode 1 issues
+	// an address-only write (no data), which some low-power parts require to wake.
+	set_device_address(addr);
+
+	if (_mr_mode != 0) {
+		return transfer(nullptr, 0, nullptr, 0);
+	}
+
+	uint8_t mr = ADDR_READ_MR;
+	return transfer(&mr, 1, nullptr, 0);
 }
 
 float FlowAngle::transfer_fn(int16_t bridge, float p_min_pa, float p_max_pa) const
@@ -256,12 +277,9 @@ void FlowAngle::read_channel(int idx)
 
 		if (mux_select(c.mux_bit) != PX4_OK) { r = FrameResult::Comms; continue; }
 
-		set_device_address(c.addr);
-		uint8_t mr = ADDR_READ_MR;
+		if (send_mr(c.addr) != PX4_OK) { r = FrameResult::Comms; continue; }
 
-		if (transfer(&mr, 1, nullptr, 0) != PX4_OK) { r = FrameResult::Comms; continue; }
-
-		px4_usleep(CONVERSION_INTERVAL);
+		px4_usleep(_conv_us);
 		mux_select(c.mux_bit);
 		r = read_frame(c, _samp[idx], raw);
 	}
@@ -342,10 +360,7 @@ void FlowAngle::RunImpl()
 				return;
 			}
 
-			set_device_address(c.addr);
-			uint8_t mr = ADDR_READ_MR;
-
-			if (transfer(&mr, 1, nullptr, 0) != PX4_OK) {
+			if (send_mr(c.addr) != PX4_OK) {
 				perf_count(_comms_errors);
 				_samp[_ch_idx].ok = false;
 
@@ -357,7 +372,7 @@ void FlowAngle::RunImpl()
 
 			_timestamp_sample = hrt_absolute_time();
 			_phase = Phase::READ;
-			ScheduleDelayed(CONVERSION_INTERVAL);
+			ScheduleDelayed(_conv_us);
 			break;
 		}
 
@@ -512,11 +527,8 @@ void FlowAngle::custom_method(const BusCLIArguments &cli)
 				uint8_t st = 0xFF; int counts = -1; float pa = 0.f; bool got = false;
 
 				if (mux_select(c.mux_bit) == PX4_OK) {
-					set_device_address(c.addr);
-					uint8_t mr = ADDR_READ_MR;
-
-					if (transfer(&mr, 1, nullptr, 0) == PX4_OK) {
-						px4_usleep(CONVERSION_INTERVAL);
+					if (send_mr(c.addr) == PX4_OK) {
+						px4_usleep(_conv_us);
 
 						if (transfer(nullptr, 0, d, 4) == PX4_OK) {
 							st = (d[0] & 0b1100'0000) >> 6;
@@ -552,15 +564,12 @@ void FlowAngle::custom_method(const BusCLIArguments &cli)
 			}
 
 			for (uint8_t addr : kAddrs) {
-				set_device_address(addr);
-				uint8_t mr = ADDR_READ_MR;
-
-				if (transfer(&mr, 1, nullptr, 0) != PX4_OK) {
+				if (send_mr(addr) != PX4_OK) {
 					PX4_INFO("  %u  0x%02x  --", ch, addr);
 					continue;
 				}
 
-				px4_usleep(CONVERSION_INTERVAL);
+				px4_usleep(_conv_us);
 				uint8_t d[4] {};
 
 				if (transfer(nullptr, 0, d, 4) == PX4_OK) {
@@ -590,8 +599,9 @@ void FlowAngle::print_status()
 {
 	I2CSPIDriverBase::print_status();
 
-	PX4_INFO("flow_angle v" FLOW_ANGLE_VERSION " | mode: %s, rate: %.1f Hz, q_min: %.1f Pa, mux: 0x%02x",
-		 _sim_en ? "SIM" : "HW", (double)_rate_hz, (double)_q_min, (unsigned)_mux_addr);
+	PX4_INFO("flow_angle v" FLOW_ANGLE_VERSION " | mode: %s, rate: %.1f Hz, q_min: %.1f Pa, mux: 0x%02x, conv: %u us, mr: %d",
+		 _sim_en ? "SIM" : "HW", (double)_rate_hz, (double)_q_min, (unsigned)_mux_addr,
+		 (unsigned)_conv_us, (int)_mr_mode);
 
 	for (int i = 0; i < N_CH; i++) {
 		const ChannelCfg &c = _cfg[i];

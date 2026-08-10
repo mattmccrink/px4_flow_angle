@@ -23,6 +23,34 @@ parameters:
         type: boolean
         default: 0
 
+      FA_CONV_US:
+        description:
+          short: Post-MR conversion/wake wait
+          long: |
+            Microseconds to wait after a measurement request before fetching data.
+            Free-running parts need only ~0.5 ms; a low-power part can need a much
+            longer wake. Raise this (e.g. 10000-20000) if the airspeed channel
+            returns stale/reset frames.
+        type: int32
+        unit: us
+        min: 500
+        max: 100000
+        default: 5000
+
+      FA_MR_MODE:
+        description:
+          short: Measurement-request style
+          long: |
+            0 = write a 0x00 data byte (free-running parts, matches in-tree ms4525do).
+            1 = address-only write with no data byte, which some low-power parts
+            require to wake and start a conversion. Try 1 if a channel is stuck
+            returning a reset frame.
+        type: enum
+        values:
+          0: Data-byte write
+          1: Address-only write
+        default: 0
+
       FA_RATE:
         description:
           short: Sample rate

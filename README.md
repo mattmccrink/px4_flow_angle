@@ -4,7 +4,7 @@ Out-of-tree PX4 driver for a five-hole probe: three **MS4515DO** digital pressur
 sensors behind a **PCA9545A** I²C switch, publishing angle-of-attack / sideslip
 (alpha/beta), dynamic pressure, and airspeed into the PX4 flight stack.
 
-**Version: 0.2.5** &nbsp;·&nbsp; **Target: PX4 v1.17.0, board `px4_fmu-v5_default` (Pixhawk 4)**
+**Version: 0.2.6** &nbsp;·&nbsp; **Target: PX4 v1.17.0, board `px4_fmu-v5_default` (Pixhawk 4)**
 
 This document takes you from a bare machine to a flashed, running driver. If you
 are a student picking this up: read the whole "Build from a clean checkout"
@@ -288,6 +288,8 @@ before parameters generate.
 |-----------|:-------:|---------|
 | `FA_SIM_EN` | 0 | 0 = read hardware. 1 = synthetic alpha/beta sweep, no I²C (SITL / no-hardware regression). |
 | `FA_DBG_RAW` | 0 | 1 = dump raw 4-byte sensor frames (hex + status + counts) at ~4 Hz for diagnostics. |
+| `FA_CONV_US` | 5000 | Post-measurement-request wait, µs. Raise (10000–20000) if a low-power channel returns stale/reset frames. |
+| `FA_MR_MODE` | 0 | Measurement-request style: 0 = 0x00 data-byte write; 1 = address-only write (wakes some low-power parts). |
 | `FA_RATE` | 50 | Sample rate, Hz. |
 | `FA_Q_MIN` | 20 | Minimum dynamic pressure (Pa) for a valid angle; gates the reduction at low q. |
 | `FA_RHO` | 1.225 | Air density for the TAS estimate. |
@@ -343,13 +345,14 @@ for a first hardware bring-up, and it means you're advancing through real layers
 | `Invalid unit in FA_…` (param gen) | A `unit:` value not on PX4's whitelist voids the whole yaml | Use only whitelisted units (`hPa` not `Pa`; grep `allowedUnits` in the param parser). |
 | `flow_angle status` shows `mode: SIM` on hardware | `FA_SIM_EN` = 1 | `param set FA_SIM_EN 0; param save`, restart the module. |
 | `i2cdetect -b 4` shows only 0x70 | Sensors are behind the mux; i2cdetect can't select channels | Use `flow_angle scan` (drives the channel-select register). §7 |
-| Airspeed reads a frozen value past full scale (e.g. 5529 Pa on a ±4977 part), often after a cold boot | Low-power part returned a `Normal`-status frame with a stale/max bridge register; pre-0.2.3 the decode latched it as `ok` | Fixed in 0.2.3: stale/out-of-range frames are rejected and the channel re-reads (fresh MR→DF) up to twice; a dropped channel shows `--` with `retries=` in `status`. Set `FA_DBG_RAW 1` to see the raw bytes. |
+| Airspeed frozen (e.g. 5529 Pa; raw `3f ff ..`, temp field railed to −50 °C) | Low-power part not converting — returns its reset register (pressure max + temp min) | 0.2.3+ rejects it (shows `--`). To attempt a wake: raise `FA_CONV_US` (e.g. `param set FA_CONV_US 20000`) and/or try `FA_MR_MODE 1` (address-only MR). Use `flow_angle scan 20` under applied pressure to see if counts move. If temp stays railed and nothing moves, the part is dead — replace it. |
 | Debug vector empty at rest but `status` shows data | Reduction gated by `q > FA_Q_MIN` at bench-zero q | Apply positive pressure; `valid` flips and the vector fills. Not a bug. §7 |
 
 ---
 
 ## 11. Version history
 
+- **0.2.6** — low-power wake levers: `FA_CONV_US` (post-MR wait) and `FA_MR_MODE` (0 = data-byte / 1 = address-only measurement request), to diagnose a stuck low-power airspeed part; MR handling centralized in `send_mr()`.
 - **0.2.5** — `scan` now runs on the command thread (output reaches the MAVLink console), prints full 4-byte frames, and pauses the sample loop for a clean bus; `flow_angle scan N` streams N frames/channel to watch counts under applied pressure; `status` shows the last raw frame + reject reason per channel.
 - **0.2.4** — stale-frame rejection + bounded re-read on the low-power airspeed channel; physical-range backstop; `FA_DBG_RAW` raw-frame dump; per-channel `retries=` and reject/re-read/drop counters in `status`. (Supersedes 0.2.3, which had a member-scope compile error in `result_str`.)
 - **0.2.2** — params generate via `MODULE_CONFIG module.yaml`; `FA_Q_MIN` unit fix; HW default (`FA_SIM_EN` default 0).
