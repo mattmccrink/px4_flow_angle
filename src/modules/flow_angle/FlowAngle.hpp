@@ -4,12 +4,13 @@
 
 // Bump this on every released tarball. Printed on start, in `flow_angle status`,
 // and in the usage text; grep-able in source to confirm which tree is in play.
-#define FLOW_ANGLE_VERSION "0.2.4"
+#define FLOW_ANGLE_VERSION "0.2.5"
 
 #include <drivers/drv_hrt.h>
 #include <lib/drivers/device/i2c.h>
 #include <lib/perf/perf_counter.h>
 #include <px4_platform_common/i2c_spi_buses.h>
+#include <px4_platform_common/atomic.h>
 #include <parameters/param.h>
 
 #include <uORB/Publication.hpp>
@@ -144,6 +145,9 @@ private:
 	ChannelSample _samp[N_CH];
 
 	bool        _bus_ready{false};   // I2C::init() succeeded (false in sim mode)
+	px4::atomic<bool> _pause{false}; // set by scan (command thread) to park RunImpl
+	uint8_t     _last_raw[N_CH][4] {};   // last raw 4-byte frame per channel (for status)
+	FrameResult _last_result[N_CH] {FrameResult::Comms, FrameResult::Comms, FrameResult::Comms};
 	Phase       _phase{Phase::MEASURE};
 	uint8_t     _ch_idx{0};
 	hrt_abstime _cycle_start{0};

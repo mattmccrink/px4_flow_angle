@@ -4,7 +4,7 @@ Out-of-tree PX4 driver for a five-hole probe: three **MS4515DO** digital pressur
 sensors behind a **PCA9545A** I²C switch, publishing angle-of-attack / sideslip
 (alpha/beta), dynamic pressure, and airspeed into the PX4 flight stack.
 
-**Version: 0.2.4** &nbsp;·&nbsp; **Target: PX4 v1.17.0, board `px4_fmu-v5_default` (Pixhawk 4)**
+**Version: 0.2.5** &nbsp;·&nbsp; **Target: PX4 v1.17.0, board `px4_fmu-v5_default` (Pixhawk 4)**
 
 This document takes you from a bare machine to a flashed, running driver. If you
 are a student picking this up: read the whole "Build from a clean checkout"
@@ -245,13 +245,19 @@ can change it without reflashing.
 Run these before trusting any computed angle:
 
 ```
-flow_angle scan            # sweeps all 4 mux channels x {0x28,0x36,0x46,0x48}
+flow_angle scan            # channel x address sweep, prints full 4-byte frames
+flow_angle scan 20         # stream 20 frames/channel at ~2 Hz (watch counts under pressure)
 ```
 
-Expected signature for this board: `0x46  ACK  Normal` with sane counts on
-channels 0, 1, 2, and `--` everywhere else (channel 3 entirely `--`). Note:
-plain `i2cdetect -b 4` only ever sees `0x70` — it cannot look behind the mux
-because it doesn't drive the channel-select register. `flow_angle scan` does.
+`scan` runs on the command thread, so its output reaches the same console as
+`start`/`status`; it pauses the sample loop for the duration so it owns the bus
+(no need to stop the module). Expected sweep signature for this board: a frame
+with status `0` (Normal) and sane counts at `0x46` on channels 0, 1, 2, and `--`
+everywhere else. `flow_angle scan N` streams N frames per channel with decoded
+counts and Pa — apply pressure and watch the numbers move to confirm a channel's
+sense element is alive. `status` also prints each channel's last raw 4 bytes and
+reject reason. Note: plain `i2cdetect -b 4` only ever sees `0x70` — it cannot look
+behind the mux because it doesn't drive the channel-select register; `scan` does.
 
 ```
 listener sensor_flow_angle
@@ -344,6 +350,7 @@ for a first hardware bring-up, and it means you're advancing through real layers
 
 ## 11. Version history
 
+- **0.2.5** — `scan` now runs on the command thread (output reaches the MAVLink console), prints full 4-byte frames, and pauses the sample loop for a clean bus; `flow_angle scan N` streams N frames/channel to watch counts under applied pressure; `status` shows the last raw frame + reject reason per channel.
 - **0.2.4** — stale-frame rejection + bounded re-read on the low-power airspeed channel; physical-range backstop; `FA_DBG_RAW` raw-frame dump; per-channel `retries=` and reject/re-read/drop counters in `status`. (Supersedes 0.2.3, which had a member-scope compile error in `result_str`.)
 - **0.2.2** — params generate via `MODULE_CONFIG module.yaml`; `FA_Q_MIN` unit fix; HW default (`FA_SIM_EN` default 0).
 - **0.2.1** — out-of-tree compile-environment fix (`__PX4_NUTTX` + root includes re-applied in module CMakeLists).

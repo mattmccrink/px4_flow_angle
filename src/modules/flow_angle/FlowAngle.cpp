@@ -267,6 +267,9 @@ void FlowAngle::read_channel(int idx)
 	}
 
 	_last_tries[idx] = (uint8_t)tries;
+	_last_result[idx] = r;
+	_last_raw[idx][0] = raw[0]; _last_raw[idx][1] = raw[1];
+	_last_raw[idx][2] = raw[2]; _last_raw[idx][3] = raw[3];
 
 	if (r == FrameResult::Ok) {
 		_samp[idx].ok = true;
@@ -309,6 +312,12 @@ void FlowAngle::RunImpl()
 {
 	if (_sim_en != 0) {
 		run_sim();
+		return;
+	}
+
+	// A `flow_angle scan` on the command thread parks us here so it owns the bus.
+	if (_pause.load()) {
+		ScheduleDelayed(20_ms);
 		return;
 	}
 
@@ -475,54 +484,105 @@ void FlowAngle::run_sim()
 
 void FlowAngle::custom_method(const BusCLIArguments &cli)
 {
-	// Invoked by `flow_angle scan`. module_custom_method schedules this as a
-	// single-shot on the driver's own work queue (wq:I2Cx), so it is serialized
-	// against RunImpl -- the bus is ours for the duration, no mux-latch race. It
-	// does briefly stall sampling (a few ms per responding sensor).
+	// Runs on the COMMAND thread (module_custom_method(..., run_on_work_queue=false)),
+	// so PX4_INFO reaches the same console as `start`/`status`. Since we are no longer
+	// serialized by the work queue, park RunImpl via _pause and let it quiesce before
+	// touching the bus.
 	if (!_bus_ready) {
 		PX4_WARN("scan needs the bus initialized -- start with FA_SIM_EN 0 first");
 		return;
 	}
 
-	// MS4515DO interface-letter addresses: I=0x28, J=0x36, K=0x46, 0=0x48.
-	static constexpr uint8_t kAddrs[] = {0x28, 0x36, 0x46, 0x48};
+	const int stream = cli.custom1;   // `flow_angle scan N` -> stream N frames/channel
 
-	PX4_INFO("PCA9545A channel x MS4515DO address sweep:");
-	PX4_INFO(" ch  addr  MR   status   counts");
+	_pause.store(true);
+	px4_usleep(3 * (uint32_t)(1e6f / _rate_hz) + 20000);   // wait for RunImpl to park
 
-	for (uint8_t ch = 0; ch < 4; ch++) {
-		if (mux_select((uint8_t)(1u << ch)) != PX4_OK) {
-			PX4_INFO("  %u   ----  mux select failed", ch);
-			continue;
+	static constexpr uint8_t kAddrs[] = {0x28, 0x36, 0x46, 0x48};   // I / J / K / 0
+
+	if (stream > 1) {
+		// pressure-watch mode: stream N frames from each configured channel at ~2 Hz,
+		// with full bytes + decoded Pa, so you can watch counts move under pressure.
+		PX4_INFO("streaming %d frames/channel -- apply pressure and watch cnt/Pa:", stream);
+
+		for (int n = 0; n < stream; n++) {
+			for (int i = 0; i < N_CH; i++) {
+				const ChannelCfg &c = _cfg[i];
+				uint8_t d[4] {};
+				uint8_t st = 0xFF; int counts = -1; float pa = 0.f; bool got = false;
+
+				if (mux_select(c.mux_bit) == PX4_OK) {
+					set_device_address(c.addr);
+					uint8_t mr = ADDR_READ_MR;
+
+					if (transfer(&mr, 1, nullptr, 0) == PX4_OK) {
+						px4_usleep(CONVERSION_INTERVAL);
+
+						if (transfer(nullptr, 0, d, 4) == PX4_OK) {
+							st = (d[0] & 0b1100'0000) >> 6;
+							counts = ((d[0] & 0b0011'1111) << 8) | d[1];
+							pa = transfer_fn((int16_t)counts, c.p_min_pa, c.p_max_pa);
+							got = true;
+						}
+					}
+				}
+
+				if (got) {
+					PX4_INFO("[%d] ch%d(0x%02x) raw=%02x %02x %02x %02x st=%u cnt=%d %.1fPa",
+						 n, i, (unsigned)c.addr, d[0], d[1], d[2], d[3],
+						 (unsigned)st, counts, (double)pa);
+
+				} else {
+					PX4_INFO("[%d] ch%d(0x%02x) no reply", n, i, (unsigned)c.addr);
+				}
+			}
+
+			px4_usleep(500000);   // ~2 Hz
 		}
 
-		for (uint8_t addr : kAddrs) {
-			set_device_address(addr);
-			uint8_t mr = ADDR_READ_MR;
+	} else {
+		// presence sweep: every channel x every candidate address, full frame bytes.
+		PX4_INFO("PCA9545A channel x MS4515DO address sweep (full frame):");
+		PX4_INFO(" ch  addr  raw bytes      st  counts");
 
-			if (transfer(&mr, 1, nullptr, 0) != PX4_OK) {
-				PX4_INFO("  %u   0x%02x  --", ch, addr);
+		for (uint8_t ch = 0; ch < 4; ch++) {
+			if (mux_select((uint8_t)(1u << ch)) != PX4_OK) {
+				PX4_INFO("  %u   ----  mux select failed", ch);
 				continue;
 			}
 
-			px4_usleep(CONVERSION_INTERVAL);
+			for (uint8_t addr : kAddrs) {
+				set_device_address(addr);
+				uint8_t mr = ADDR_READ_MR;
 
-			uint8_t d[4] {};
-			const char *stat = "no-data";
-			int counts = -1;
+				if (transfer(&mr, 1, nullptr, 0) != PX4_OK) {
+					PX4_INFO("  %u  0x%02x  --", ch, addr);
+					continue;
+				}
 
-			if (transfer(nullptr, 0, d, sizeof(d)) == PX4_OK) {
-				const uint8_t s = (d[0] & 0b1100'0000) >> 6;
-				counts = ((d[0] & 0b0011'1111) << 8) | d[1];
-				stat = (s == 0) ? "Normal" : (s == 2) ? "Stale" : (s == 3) ? "Fault" : "Rsvd";
+				px4_usleep(CONVERSION_INTERVAL);
+				uint8_t d[4] {};
+
+				if (transfer(nullptr, 0, d, 4) == PX4_OK) {
+					const uint8_t s = (d[0] & 0b1100'0000) >> 6;
+					const int counts = ((d[0] & 0b0011'1111) << 8) | d[1];
+					PX4_INFO("  %u  0x%02x  %02x %02x %02x %02x  %u   %d",
+						 ch, addr, d[0], d[1], d[2], d[3], (unsigned)s, counts);
+
+				} else {
+					PX4_INFO("  %u  0x%02x  ACK (no DF)", ch, addr);
+				}
 			}
-
-			PX4_INFO("  %u   0x%02x  ACK  %-7s  %d", ch, addr, stat, counts);
 		}
 	}
 
 	set_device_address(_mux_addr);
-	mux_select(0x00); // deselect; RunImpl re-selects on its next cycle
+	mux_select(0x00);
+
+	// resume the sample loop cleanly from the top of a cycle
+	_ch_idx = 0;
+	_phase = Phase::MEASURE;
+	_pause.store(false);
 	PX4_INFO("scan done");
 }
 
@@ -539,6 +599,9 @@ void FlowAngle::print_status()
 			 (unsigned)__builtin_ctz(c.mux_bit), (unsigned)c.role, (unsigned)c.addr,
 			 (double)c.p_min_pa, (double)c.p_max_pa,
 			 (double)_samp[i].press_pa, _samp[i].ok ? "ok" : "--", (unsigned)_last_tries[i]);
+		PX4_INFO("        raw=%02x %02x %02x %02x st=%u -> %s",
+			 _last_raw[i][0], _last_raw[i][1], _last_raw[i][2], _last_raw[i][3],
+			 (unsigned)((_last_raw[i][0] >> 6) & 0x3), result_str(_last_result[i]));
 	}
 
 	perf_print_counter(_sample_perf);

@@ -1,6 +1,7 @@
 #include "FlowAngle.hpp"
 
 #include <px4_platform_common/getopt.h>
+#include <stdlib.h>
 #include <px4_platform_common/module.h>
 #include <drivers/drv_sensor.h>
 
@@ -38,7 +39,8 @@ $ flow_angle start -b 4 -a 0x70 -f 400
 	PRINT_MODULE_USAGE_PARAMS_I2C_SPI_DRIVER(true, false);
 	PRINT_MODULE_USAGE_PARAMS_I2C_ADDRESS(MUX_ADDRESS_DEFAULT);
 	PRINT_MODULE_USAGE_COMMAND_DESCR("scan",
-					 "Sweep all 4 mux channels x {0x28,0x36,0x46,0x48} and print a presence table");
+					 "Sweep channels x {0x28,0x36,0x46,0x48}, printing full frame bytes. "
+					 "'scan N' streams N frames/channel so you can watch counts under applied pressure.");
 	PRINT_MODULE_USAGE_DEFAULT_COMMANDS();
 }
 
@@ -68,8 +70,12 @@ extern "C" __EXPORT int flow_angle_main(int argc, char *argv[])
 		return ThisDriver::module_status(iterator);
 
 	} else if (!strcmp(verb, "scan")) {
-		// runs custom_method() on the driver's work queue (serialized vs sampling)
-		return ThisDriver::module_custom_method(cli, iterator);
+		// `flow_angle scan [N]`: optional N streams N frames/channel (watch counts).
+		if (argc >= 3) { int n = atoi(argv[argc - 1]); if (n > 0) { cli.custom1 = n; } }
+
+		// run on the COMMAND thread (false) so output reaches this console; the
+		// driver pauses its sample loop internally for the duration.
+		return ThisDriver::module_custom_method(cli, iterator, false);
 	}
 
 	ThisDriver::print_usage();
