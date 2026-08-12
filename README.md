@@ -4,7 +4,7 @@ Out-of-tree PX4 driver for a five-hole probe: three **MS4515DO** digital pressur
 sensors behind a **PCA9545A** I²C switch, publishing angle-of-attack / sideslip
 (alpha/beta), dynamic pressure, and airspeed into the PX4 flight stack.
 
-**Version: 0.2.6** &nbsp;·&nbsp; **Target: PX4 v1.17.0, board `px4_fmu-v5_default` (Pixhawk 4)**
+**Version: 0.3.0** &nbsp;·&nbsp; **Target: PX4 v1.17.0, board `px4_fmu-v5_default` (Pixhawk 4)**
 
 This document takes you from a bare machine to a flashed, running driver. If you
 are a student picking this up: read the whole "Build from a clean checkout"
@@ -69,6 +69,11 @@ px4_flow_angle/
 │       ├── FlowAngle.hpp / .cpp   # the driver (I2CSPIDriver)
 │       ├── flow_angle_main.cpp    # command dispatch (start/stop/status/scan) + bus config
 │       └── module.yaml            # parameters (FA_*)
+├── sd_card/                       # copy these onto the flight controller's SD card
+│   └── etc/
+│       ├── extras.txt             # autostart hook (-> /fs/microsd/etc/extras.txt)
+│       └── flow_angle/
+│           └── config.txt         # per-channel sensor config (-> /fs/microsd/etc/flow_angle/)
 └── tools/
     └── patch_px4.py               # two idempotent PX4-tree edits (re-run after any checkout)
 ```
@@ -287,6 +292,7 @@ before parameters generate.
 | Parameter | Default | Meaning |
 |-----------|:-------:|---------|
 | `FA_SIM_EN` | 0 | 0 = read hardware. 1 = synthetic alpha/beta sweep, no I²C (SITL / no-hardware regression). |
+| `FA_CFG_SD` | 1 | 1 = load per-channel sensor config from the SD card at boot (see below); 0 = compiled/param defaults only. |
 | `FA_DBG_RAW` | 0 | 1 = dump raw 4-byte sensor frames (hex + status + counts) at ~4 Hz for diagnostics. |
 | `FA_CONV_US` | 5000 | Post-measurement-request wait, µs. Raise (10000–20000) if a low-power channel returns stale/reset frames. |
 | `FA_MR_MODE` | 0 | Measurement-request style: 0 = 0x00 data-byte write; 1 = address-only write (wakes some low-power parts). |
@@ -308,6 +314,56 @@ flow_angle start -b 4 -a 0x70 -f 400   # publishes a synthetic sweep; no I2C tra
 ```
 
 ---
+
+## 8b. SD-card configuration and autostart
+
+The files under `sd_card/` in this repo are copied onto the flight controller's
+microSD card, preserving the layout: `sd_card/etc/...` -> `/fs/microsd/etc/...`.
+
+### Channel config (`/fs/microsd/etc/flow_angle/config.txt`)
+
+Read at boot when `FA_CFG_SD = 1`. It sets each channel's role, I2C address,
+range, units, and output type in plain text, so swapping a sensor (even a
+different part or family — e.g. a MS4525DO in psi alongside MS4515DO parts in
+inH2O) is a text edit, not a recompile. Format and an example are in the file
+itself; the essentials:
+
+```
+version = 1
+ch0.role = alpha      ch0.addr = 0x46   ch0.range = 4.0   ch0.units = inH2O   ch0.type = B
+ch1.role = airspeed   ch1.addr = 0x46   ch1.range = 1.0   ch1.units = psi     ch1.type = B
+ch2.role = beta       ch2.addr = 0x46   ch2.range = 4.0   ch2.units = inH2O   ch2.type = B
+```
+
+**Fail-safe by design:** a missing file, a `version` mismatch, or any incomplete
+or invalid channel makes the driver *ignore the whole file*, fall back to compiled
+defaults, and log exactly why (down to the line number). It never half-applies a
+bad file. This is deliberately the same load/parse/validate/fallback path the
+milestone-3 calibration LUT will reuse — debugged here against trivial data first.
+
+### Boot-time acceptance gate
+
+After loading config, the driver runs a **temperature-sanity check** on every
+channel: a working MS45x reports roughly ambient temperature, while a dead,
+unpowered, mis-addressed, or absent part rails to the -50 C reset floor. Channels
+that pass are marked good; channels that fail are logged and shown as `UNVERIFIED`
+in `flow_angle status`. (This single check would have caught the dead-sensor
+episodes in development in seconds — use it as your sensor acceptance test.)
+
+### Autostart (`/fs/microsd/etc/extras.txt`)
+
+PX4 sources `etc/extras.txt` from the SD card late in boot (after core startup),
+if present — the supported hook for custom drivers, keeping boot config off the
+firmware image. The sample contains one line:
+
+```
+flow_angle start -b 4 -a 0x70 -f 400
+```
+
+**Do this last.** Validate by hand (`start` -> `scan` -> `status`, all channels
+verified) before enabling autostart — an autostarted driver has no human at the
+prompt to notice a bad config or a dead sensor. Confirm your board's SD mount is
+`/fs/microsd` (standard for fmu-v5) and the extras filename matches your image.
 
 ## 9. How it fits into PX4 (brief)
 
@@ -352,6 +408,7 @@ for a first hardware bring-up, and it means you're advancing through real layers
 
 ## 11. Version history
 
+- **0.3.0** — human-readable per-channel sensor config on the SD card (`/fs/microsd/etc/flow_angle/config.txt`, `FA_CFG_SD`), with per-channel range/units/output-type; boot-time temperature-sanity acceptance gate (`status` marks a channel `UNVERIFIED` if it isn't converting); sample `extras.txt` autostart. Shares the load/parse/validate/fallback skeleton the milestone-3 calibration LUT will reuse.
 - **0.2.6** — low-power wake levers: `FA_CONV_US` (post-MR wait) and `FA_MR_MODE` (0 = data-byte / 1 = address-only measurement request), to diagnose a stuck low-power airspeed part; MR handling centralized in `send_mr()`.
 - **0.2.5** — `scan` now runs on the command thread (output reaches the MAVLink console), prints full 4-byte frames, and pauses the sample loop for a clean bus; `flow_angle scan N` streams N frames/channel to watch counts under applied pressure; `status` shows the last raw frame + reject reason per channel.
 - **0.2.4** — stale-frame rejection + bounded re-read on the low-power airspeed channel; physical-range backstop; `FA_DBG_RAW` raw-frame dump; per-channel `retries=` and reject/re-read/drop counters in `status`. (Supersedes 0.2.3, which had a member-scope compile error in `result_str`.)

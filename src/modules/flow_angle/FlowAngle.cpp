@@ -3,6 +3,8 @@
 #include <px4_platform_common/log.h>
 #include <px4_platform_common/posix.h>
 #include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 using namespace time_literals;
@@ -41,6 +43,7 @@ void FlowAngle::load_parameters()
 
 	get_i("FA_SIM_EN", _sim_en);
 	get_i("FA_DBG_RAW", _dbg_raw);
+	get_i("FA_CFG_SD", _cfg_sd);
 	get_i("FA_MR_MODE", _mr_mode);
 
 	int32_t conv = (int32_t)_conv_us;
@@ -58,12 +61,15 @@ void FlowAngle::load_parameters()
 	if (_rate_hz < 1.f)  { _rate_hz = 50.f; }
 	if (_rho     < 0.1f) { _rho = 1.225f; }
 
-	// output type: 0 = A (10-90%), 1 = B (5-95%). Our parts are B.
+	// output type: 0 = A (10-90%), 1 = B (5-95%). Applied to all channels here as a
+	// default; a per-channel SD config 'type' overrides it in load_config_file().
 	int32_t out_typ = 1;
 	get_i("FA_OUT_TYP", out_typ);
 
-	if (out_typ == 0) { _out_offset = 0.1f;  _out_span = 0.8f; }
-	else              { _out_offset = 0.05f; _out_span = 0.9f; }
+	const float off = (out_typ == 0) ? 0.1f  : 0.05f;
+	const float spn = (out_typ == 0) ? 0.8f  : 0.9f;
+
+	for (int i = 0; i < N_CH; i++) { _cfg[i].out_offset = off; _cfg[i].out_span = spn; }
 
 	// per-channel map / addresses / ranges (defaults match the populated PCB)
 	struct { const char *ch; const char *ad; const char *rng; Role role; int idx; } p[] = {
@@ -92,6 +98,213 @@ void FlowAngle::load_parameters()
 	}
 }
 
+const char *FlowAngle::role_str(Role r)
+{
+	switch (r) {
+	case Role::ALPHA: return "alpha";
+	case Role::PITOT: return "airspeed";
+	case Role::BETA:  return "beta";
+	}
+
+	return "?";
+}
+
+static char *fa_trim(char *s)
+{
+	while (*s == ' ' || *s == '\t' || *s == '\r' || *s == '\n') { s++; }
+
+	char *end = s + strlen(s);
+
+	while (end > s && (end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\r' || end[-1] == '\n')) {
+		*--end = 0;
+	}
+
+	return s;
+}
+
+static float fa_unit_to_pa(const char *u)
+{
+	if (strcmp(u, "inH2O") == 0 || strcmp(u, "inh2o") == 0) { return 248.84f; }
+	if (strcmp(u, "psi") == 0)                              { return 6894.757f; }
+	if (strcmp(u, "kPa") == 0 || strcmp(u, "kpa") == 0)     { return 1000.f; }
+	if (strcmp(u, "hPa") == 0 || strcmp(u, "mbar") == 0)    { return 100.f; }
+	if (strcmp(u, "Pa") == 0 || strcmp(u, "pa") == 0)       { return 1.f; }
+
+	return -1.f;   // unknown
+}
+
+bool FlowAngle::load_config_file()
+{
+	FILE *f = fopen(FA_CONFIG_PATH, "r");
+
+	if (f == nullptr) {
+		PX4_WARN("config: %s not found", FA_CONFIG_PATH);
+		return false;
+	}
+
+	// work on a copy so a malformed file never half-applies
+	ChannelCfg tmp[N_CH];
+	float range[N_CH]; float unit[N_CH]; bool bidir[N_CH];
+	bool s_role[N_CH], s_addr[N_CH], s_range[N_CH], s_units[N_CH], s_type[N_CH], touched[N_CH];
+
+	for (int i = 0; i < N_CH; i++) {
+		tmp[i] = _cfg[i];
+		range[i] = 0.f; unit[i] = 0.f; bidir[i] = true;
+		s_role[i] = s_addr[i] = s_range[i] = s_units[i] = s_type[i] = touched[i] = false;
+	}
+
+	int file_ver = -1;
+	int errors = 0;
+	int lineno = 0;
+	char line[128];
+
+	while (fgets(line, sizeof(line), f) != nullptr) {
+		lineno++;
+
+		char *hash = strchr(line, '#'); if (hash) { *hash = 0; }
+		char *eq = strchr(line, '=');
+		if (eq == nullptr) { continue; }   // blank or comment-only
+
+		*eq = 0;
+		char *key = fa_trim(line);
+		char *val = fa_trim(eq + 1);
+		if (*key == 0) { continue; }
+
+		if (strcmp(key, "version") == 0) { file_ver = atoi(val); continue; }
+
+		if (key[0] == 'c' && key[1] == 'h' && key[2] >= '0' && key[2] <= '9' && key[3] == '.') {
+			const int ch = key[2] - '0';
+
+			if (ch >= N_CH) { PX4_WARN("config line %d: channel %d out of range", lineno, ch); errors++; continue; }
+
+			const char *fld = key + 4;
+			touched[ch] = true;
+
+			if (strcmp(fld, "role") == 0) {
+				if (strcmp(val, "alpha") == 0)                                  { tmp[ch].role = Role::ALPHA; }
+				else if (strcmp(val, "airspeed") == 0 || strcmp(val, "pitot") == 0) { tmp[ch].role = Role::PITOT; }
+				else if (strcmp(val, "beta") == 0)                             { tmp[ch].role = Role::BETA; }
+				else { PX4_WARN("config line %d: bad role '%s'", lineno, val); errors++; continue; }
+
+				s_role[ch] = true;
+
+			} else if (strcmp(fld, "addr") == 0) {
+				tmp[ch].addr = (uint8_t)strtol(val, nullptr, 0); s_addr[ch] = true;
+
+			} else if (strcmp(fld, "range") == 0) {
+				range[ch] = strtof(val, nullptr); s_range[ch] = true;
+
+			} else if (strcmp(fld, "units") == 0) {
+				unit[ch] = fa_unit_to_pa(val);
+				if (unit[ch] < 0.f) { PX4_WARN("config line %d: unknown units '%s'", lineno, val); errors++; continue; }
+				s_units[ch] = true;
+
+			} else if (strcmp(fld, "type") == 0) {
+				if (strcmp(val, "A") == 0 || strcmp(val, "a") == 0)      { tmp[ch].out_offset = 0.1f;  tmp[ch].out_span = 0.8f; }
+				else if (strcmp(val, "B") == 0 || strcmp(val, "b") == 0) { tmp[ch].out_offset = 0.05f; tmp[ch].out_span = 0.9f; }
+				else { PX4_WARN("config line %d: bad type '%s' (A or B)", lineno, val); errors++; continue; }
+
+				s_type[ch] = true;
+
+			} else if (strcmp(fld, "bidir") == 0) {
+				bidir[ch] = (strcmp(val, "yes") == 0 || strcmp(val, "true") == 0 || strcmp(val, "1") == 0);
+
+			} else if (strcmp(fld, "family") == 0) {
+				// informational only (4515 / 4525 share the DF frame format)
+
+			} else {
+				PX4_WARN("config line %d: unknown field 'ch%d.%s'", lineno, ch, fld); errors++;
+			}
+
+			continue;
+		}
+
+		PX4_WARN("config line %d: unknown key '%s'", lineno, key); errors++;
+	}
+
+	fclose(f);
+
+	if (file_ver != FA_CONFIG_VERSION) {
+		PX4_ERR("config: version %d != expected %d -- ignoring file", file_ver, FA_CONFIG_VERSION);
+		return false;
+	}
+
+	int ready = 0;
+
+	for (int ch = 0; ch < N_CH; ch++) {
+		if (!touched[ch]) { continue; }
+
+		if (!(s_role[ch] && s_addr[ch] && s_range[ch] && s_units[ch] && s_type[ch])) {
+			PX4_ERR("config ch%d: incomplete (need role, addr, range, units, type) -- ignoring file", ch);
+			return false;
+		}
+
+		if (range[ch] <= 0.f) { PX4_ERR("config ch%d: range must be > 0 -- ignoring file", ch); return false; }
+
+		const float fs = range[ch] * unit[ch];
+		tmp[ch].p_max_pa = fs;
+		tmp[ch].p_min_pa = bidir[ch] ? -fs : 0.f;
+		ready++;
+	}
+
+	if (ready == 0) { PX4_WARN("config: no complete channel entries -- using defaults"); return false; }
+
+	for (int i = 0; i < N_CH; i++) { _cfg[i] = tmp[i]; }
+
+	PX4_INFO("config: loaded %s (v%d, %d channel(s), %d parse warning(s))",
+		 FA_CONFIG_PATH, file_ver, ready, errors);
+
+	for (int i = 0; i < N_CH; i++) {
+		const ChannelCfg &c = _cfg[i];
+		PX4_INFO("  ch%d %-8s addr=0x%02x P[%.0f..%.0f]Pa type%s",
+			 i, role_str(c.role), (unsigned)c.addr,
+			 (double)c.p_min_pa, (double)c.p_max_pa, (c.out_span > 0.85f) ? "B" : "A");
+	}
+
+	return true;
+}
+
+void FlowAngle::verify_channels()
+{
+	for (int i = 0; i < N_CH; i++) {
+		ChannelCfg &c = _cfg[i];
+		c.verified = false;
+
+		bool got = false;
+		float temp = -99.f;
+
+		if (mux_select(c.mux_bit) == PX4_OK && send_mr(c.addr) == PX4_OK) {
+			px4_usleep(_conv_us);
+			uint8_t d[4] {};
+
+			if (transfer(nullptr, 0, d, 4) == PX4_OK) {
+				const int16_t t11 = ((d[2] << 8) + (0b1110'0000 & d[3])) / (1 << 5);
+				temp = (200.f * t11) / 2047.f - 50.f;
+				got = true;
+			}
+		}
+
+		// A converting MS45x reports roughly ambient; a dead/absent/unpowered part
+		// rails temperature to the -50C reset floor. This is the acceptance gate.
+		if (got && temp > -20.f && temp < 60.f) {
+			c.verified = true;
+			PX4_INFO("verify ch%d %-8s 0x%02x: temp=%.1fC  OK",
+				 i, role_str(c.role), (unsigned)c.addr, (double)temp);
+
+		} else if (got) {
+			PX4_WARN("verify ch%d %-8s 0x%02x: temp=%.1fC  NOT CONVERTING (dead/unpowered)",
+				 i, role_str(c.role), (unsigned)c.addr, (double)temp);
+
+		} else {
+			PX4_WARN("verify ch%d %-8s 0x%02x: no reply (absent / mux / wiring)",
+				 i, role_str(c.role), (unsigned)c.addr);
+		}
+	}
+
+	set_device_address(_mux_addr);
+	mux_select(0x00);
+}
+
 int FlowAngle::init()
 {
 	load_parameters(); // read FA_SIM_EN (and the rest) before deciding to touch the bus
@@ -115,19 +328,17 @@ int FlowAngle::init()
 
 	_bus_ready = true;
 
-	// bench aid: report which configured channels answer at their address.
-	for (int i = 0; i < N_CH; i++) {
-		const ChannelCfg &c = _cfg[i];
-		bool ok = false;
-
-		if (mux_select(c.mux_bit) == PX4_OK) {
-			ok = (send_mr(c.addr) == PX4_OK);
+	// Channel config: SD file (if enabled and present) overrides the compiled
+	// defaults / params. Falls back cleanly on any problem.
+	if (_cfg_sd != 0) {
+		if (!load_config_file()) {
+			PX4_INFO("using compiled/param channel config (no valid SD config)");
 		}
-
-		PX4_INFO("ch%u (0x%02x) role=%u addr=0x%02x range=+/-%.0f Pa : %s",
-			 (unsigned)__builtin_ctz(c.mux_bit), (unsigned)c.mux_bit, (unsigned)c.role,
-			 (unsigned)c.addr, (double)c.p_max_pa, ok ? "ACK" : "no reply");
 	}
+
+	// Boot-time acceptance gate: confirm each channel's sensor is present AND
+	// actually converting (temperature reads ambient, not the -50C reset rail).
+	verify_channels();
 
 	set_device_address(_mux_addr);
 	mux_select(0x00); // leave all channels deselected until the first cycle
@@ -177,13 +388,13 @@ int FlowAngle::send_mr(uint8_t addr)
 	return transfer(&mr, 1, nullptr, 0);
 }
 
-float FlowAngle::transfer_fn(int16_t bridge, float p_min_pa, float p_max_pa) const
+float FlowAngle::transfer_fn(int16_t bridge, const ChannelCfg &c) const
 {
-	// Inversion of the MS4515DO pressure transfer function.
-	//   type A: 10%..90% -> offset 0.1, span 0.8
-	//   type B:  5%..95% -> offset 0.05, span 0.9  (our parts)
-	return (bridge - _out_offset * FULL_SCALE) * (p_max_pa - p_min_pa)
-	       / (_out_span * FULL_SCALE) + p_min_pa;
+	// Inversion of the MS45x pressure transfer function, per-channel output type:
+	//   type A: 10%..90% -> offset 0.10, span 0.80
+	//   type B:  5%..95% -> offset 0.05, span 0.90
+	return (bridge - c.out_offset * FULL_SCALE) * (c.p_max_pa - c.p_min_pa)
+	       / (c.out_span * FULL_SCALE) + c.p_min_pa;
 }
 
 FlowAngle::FrameResult FlowAngle::read_frame(const ChannelCfg &c, ChannelSample &out, uint8_t raw[4])
@@ -214,7 +425,7 @@ FlowAngle::FrameResult FlowAngle::read_frame(const ChannelCfg &c, ChannelSample 
 
 	const int16_t bridge = ((raw[0] & 0b0011'1111) << 8) | raw[1];
 	const int16_t temp11 = ((raw[2] << 8) + (0b1110'0000 & raw[3])) / (1 << 5);
-	const float press = transfer_fn(bridge, c.p_min_pa, c.p_max_pa);
+	const float press = transfer_fn(bridge, c);
 
 	// Physical-range backstop: a stale/garbage register (e.g. a near-0xFFFF bridge)
 	// decodes to a pressure beyond the sensor's full scale -- impossible, so reject
@@ -533,7 +744,7 @@ void FlowAngle::custom_method(const BusCLIArguments &cli)
 						if (transfer(nullptr, 0, d, 4) == PX4_OK) {
 							st = (d[0] & 0b1100'0000) >> 6;
 							counts = ((d[0] & 0b0011'1111) << 8) | d[1];
-							pa = transfer_fn((int16_t)counts, c.p_min_pa, c.p_max_pa);
+							pa = transfer_fn((int16_t)counts, c);
 							got = true;
 						}
 					}
@@ -605,10 +816,11 @@ void FlowAngle::print_status()
 
 	for (int i = 0; i < N_CH; i++) {
 		const ChannelCfg &c = _cfg[i];
-		PX4_INFO("  ch%u role=%u addr=0x%02x P[%.0f..%.0f]Pa last=%.2fPa %s (retries=%u)",
-			 (unsigned)__builtin_ctz(c.mux_bit), (unsigned)c.role, (unsigned)c.addr,
+		PX4_INFO("  ch%u %-8s addr=0x%02x P[%.0f..%.0f]Pa last=%.2fPa %s%s (retries=%u)",
+			 (unsigned)__builtin_ctz(c.mux_bit), role_str(c.role), (unsigned)c.addr,
 			 (double)c.p_min_pa, (double)c.p_max_pa,
-			 (double)_samp[i].press_pa, _samp[i].ok ? "ok" : "--", (unsigned)_last_tries[i]);
+			 (double)_samp[i].press_pa, _samp[i].ok ? "ok" : "--",
+			 c.verified ? "" : " UNVERIFIED", (unsigned)_last_tries[i]);
 		PX4_INFO("        raw=%02x %02x %02x %02x st=%u -> %s",
 			 _last_raw[i][0], _last_raw[i][1], _last_raw[i][2], _last_raw[i][3],
 			 (unsigned)((_last_raw[i][0] >> 6) & 0x3), result_str(_last_result[i]));

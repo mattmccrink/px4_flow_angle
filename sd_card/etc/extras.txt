@@ -1,0 +1,16 @@
+# /fs/microsd/etc/extras.txt
+#
+# User startup script -- PX4 sources this from the SD card late in boot (after the
+# core sensors, uORB, EKF2 and the parameter system are up), if the file exists.
+# This is the supported hook for starting custom drivers; it keeps boot config on
+# the SD card and OUT of the firmware image (no reflash to change it).
+#
+# Start the five-hole-probe driver on the external I2C bus (Pixhawk 4 = I2C bus 4),
+# at the PCA9545A mux address, 400 kHz. The driver reads its per-channel sensor
+# config from /fs/microsd/etc/flow_angle/config.txt (see FA_CFG_SD).
+#
+# Validate by hand FIRST (start + scan + status), and only add this line once the
+# config loads and all channels verify -- an autostarted driver has no human at the
+# prompt to catch a bad config or a dead sensor.
+
+flow_angle start -b 4 -a 0x70 -f 400

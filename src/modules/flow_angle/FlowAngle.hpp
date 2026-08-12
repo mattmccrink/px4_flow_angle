@@ -4,7 +4,11 @@
 
 // Bump this on every released tarball. Printed on start, in `flow_angle status`,
 // and in the usage text; grep-able in source to confirm which tree is in play.
-#define FLOW_ANGLE_VERSION "0.2.6"
+#define FLOW_ANGLE_VERSION "0.3.0"
+
+// Human-readable channel config on the SD card (see README for the format).
+#define FA_CONFIG_PATH    "/fs/microsd/etc/flow_angle/config.txt"
+#define FA_CONFIG_VERSION 1
 
 #include <drivers/drv_hrt.h>
 #include <lib/drivers/device/i2c.h>
@@ -110,11 +114,14 @@ private:
 	static constexpr int MAX_REREADS = 2;
 
 	struct ChannelCfg {
-		uint8_t mux_bit;   // PCA9545A control byte: 1 << channel (0x01/0x02/0x04)
-		uint8_t addr;      // sensor 7-bit I2C address behind the mux
-		float   p_min_pa;  // pressure at 5% output (type B)
-		float   p_max_pa;  // pressure at 95% output (type B)
+		uint8_t mux_bit;    // PCA9545A control byte: 1 << channel (0x01/0x02/0x04)
+		uint8_t addr;       // sensor 7-bit I2C address behind the mux
+		float   p_min_pa;   // pressure at the low output code
+		float   p_max_pa;   // pressure at the high output code
+		float   out_offset; // output-type offset fraction: A=0.10, B=0.05
+		float   out_span;   // output-type span fraction:   A=0.80, B=0.90
 		Role    role;
+		bool    verified;   // passed the boot-time temperature-sanity gate
 	};
 
 	struct ChannelSample {
@@ -131,17 +138,21 @@ private:
 	void  read_channel(int idx);                       // full read w/ stale-reject + bounded re-read
 	void  log_raw(int idx, const uint8_t raw[4], FrameResult r, int tries); // rate-limited raw-byte dump
 	static const char *result_str(FrameResult r);      // frame-result name for logs
-	float transfer_fn(int16_t bridge, float p_min_pa, float p_max_pa) const;
+	static const char *role_str(Role r);
+	bool  load_config_file();                          // read/parse the SD config; false -> defaults
+	void  verify_channels();                           // boot-time presence + temperature-sanity gate
+	float transfer_fn(int16_t bridge, const ChannelCfg &c) const;
 	void  publish_cycle();
 	void  schedule_next_cycle();
 	const ChannelSample *sample_for(Role r) const;
 
 	uint8_t _mux_addr{0x70};
 
+	// type-B defaults (5..95%); a config file or FA_OUT_TYP may change per channel.
 	ChannelCfg    _cfg[N_CH] {
-		{0x01, 0x46, -4.f  * INH2O_TO_PA, +4.f  * INH2O_TO_PA, Role::ALPHA},
-		{0x02, 0x46, -20.f * INH2O_TO_PA, +20.f * INH2O_TO_PA, Role::PITOT},
-		{0x04, 0x46, -4.f  * INH2O_TO_PA, +4.f  * INH2O_TO_PA, Role::BETA},
+		{0x01, 0x46, -4.f  * INH2O_TO_PA, +4.f  * INH2O_TO_PA, 0.05f, 0.9f, Role::ALPHA, false},
+		{0x02, 0x46, -20.f * INH2O_TO_PA, +20.f * INH2O_TO_PA, 0.05f, 0.9f, Role::PITOT, false},
+		{0x04, 0x46, -4.f  * INH2O_TO_PA, +4.f  * INH2O_TO_PA, 0.05f, 0.9f, Role::BETA,  false},
 	};
 	ChannelSample _samp[N_CH];
 
@@ -154,13 +165,12 @@ private:
 	hrt_abstime _cycle_start{0};
 	hrt_abstime _timestamp_sample{0};
 
-	// output-type offset/span fractions: A(10-90%) = 0.1/0.8, B(5-95%) = 0.05/0.9
-	float _out_offset{0.05f};
-	float _out_span{0.9f};
+	// (output-type fractions are per-channel in ChannelCfg now)
 
 	// tunables (params)
 	int32_t _sim_en{0};   // default HW; FA_SIM_EN=1 (param) re-enables the synthetic path
 	int32_t _dbg_raw{0};  // FA_DBG_RAW=1 -> dump raw 4-byte frames (rate-limited)
+	int32_t _cfg_sd{1};   // FA_CFG_SD=1 -> load channel config from the SD card at boot
 	uint32_t _conv_us{5000};  // FA_CONV_US: post-MR conversion/wake wait [us]
 	int32_t _mr_mode{0};      // FA_MR_MODE: 0 = 1-byte 0x00 write, 1 = address-only write
 	uint8_t _last_tries[N_CH] {};   // re-reads needed on the last cycle, per channel

@@ -1,0 +1,52 @@
+# flow_angle channel configuration
+#
+# Copy this to the flight controller's SD card at:
+#     /fs/microsd/etc/flow_angle/config.txt
+# It is read at boot when FA_CFG_SD = 1. Edit it to match the sensors you have
+# populated -- no recompile needed.
+#
+# Format: one "key = value" per line. '#' starts a comment. Blank lines ignored.
+#
+# Each channel key is  chN.field  where N is the PCA9545A mux channel (0,1,2).
+# A channel that appears must specify ALL of:
+#     role    = alpha | airspeed | beta         (aerodynamic role)
+#     addr    = I2C address behind the mux       (e.g. 0x46; confirm with `flow_angle scan`)
+#     range   = full-scale magnitude             (a number)
+#     units   = inH2O | psi | kPa | hPa | Pa     (units of 'range')
+#     type    = A | B                            (output type: A=10-90%, B=5-95%)
+# Optional:
+#     family  = 4515 | 4525                      (informational; both decode identically)
+#     bidir   = yes | no                         (differential=yes/+-FS; gage=no/0..FS; default yes)
+#
+# Safety net: a missing file, a version mismatch, or ANY incomplete/invalid channel
+# makes the driver ignore the file, fall back to compiled defaults, and log the reason.
+# `flow_angle status` then shows what loaded and whether each channel passed the boot
+# temperature-sanity check (a channel marked UNVERIFIED did not answer with a sane
+# temperature -- i.e. dead, unpowered, mis-addressed, or absent).
+
+version = 1
+
+# --- channel 0: angle of attack  (MS4515DO, +/-4 inH2O, type B) ---
+ch0.role   = alpha
+ch0.addr   = 0x46
+ch0.range  = 4.0
+ch0.units  = inH2O
+ch0.type   = B
+ch0.family = 4515
+
+# --- channel 1: airspeed  (MS4525DO -- EDIT range/units to match YOUR part!) ---
+# NOTE: 4525 parts are specified in psi, NOT inH2O. Set range/units to your part.
+ch1.role   = airspeed
+ch1.addr   = 0x46
+ch1.range  = 1.0
+ch1.units  = psi
+ch1.type   = B
+ch1.family = 4525
+
+# --- channel 2: sideslip  (MS4515DO, +/-4 inH2O, type B) ---
+ch2.role   = beta
+ch2.addr   = 0x46
+ch2.range  = 4.0
+ch2.units  = inH2O
+ch2.type   = B
+ch2.family = 4515

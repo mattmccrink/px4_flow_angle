@@ -13,6 +13,17 @@ parameters:
         type: boolean
         default: 0
 
+      FA_CFG_SD:
+        description:
+          short: Load channel config from SD card
+          long: |
+            When 1, read per-channel sensor config from
+            /fs/microsd/etc/flow_angle/config.txt at boot (role, address, range,
+            units, output type), overriding compiled/param defaults. Falls back to
+            defaults if the file is missing or malformed. Set 0 to ignore the file.
+        type: boolean
+        default: 1
+
       FA_DBG_RAW:
         description:
           short: Dump raw sensor frames (debug)
