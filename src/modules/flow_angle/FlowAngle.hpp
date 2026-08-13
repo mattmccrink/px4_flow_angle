@@ -4,7 +4,7 @@
 
 // Bump this on every released tarball. Printed on start, in `flow_angle status`,
 // and in the usage text; grep-able in source to confirm which tree is in play.
-#define FLOW_ANGLE_VERSION "0.3.0"
+#define FLOW_ANGLE_VERSION "0.3.1"
 
 // Human-readable channel config on the SD card (see README for the format).
 #define FA_CONFIG_PATH    "/fs/microsd/etc/flow_angle/config.txt"
@@ -141,6 +141,9 @@ private:
 	static const char *role_str(Role r);
 	bool  load_config_file();                          // read/parse the SD config; false -> defaults
 	void  verify_channels();                           // boot-time presence + temperature-sanity gate
+	void  do_scan(int stream);                         // `scan` sub-command (command thread)
+	void  do_null(int n);                              // `null` sub-command: capture per-channel zero
+	float apply_offset(Role r, float raw_pa, float temp_c) const; // subtract the channel zero
 	float transfer_fn(int16_t bridge, const ChannelCfg &c) const;
 	void  publish_cycle();
 	void  schedule_next_cycle();
@@ -180,6 +183,7 @@ private:
 	float   _rho{1.225f};
 	float   _cal_a{1.f};   // placeholder alpha gain; real map is milestone 3
 	float   _cal_b{1.f};   // placeholder beta gain
+	float   _off[3] {0.f, 0.f, 0.f};   // per-role zero offset [alpha, airspeed, beta], Pa (FA_OFF_*)
 
 	float   _sim_phase{0.f};
 

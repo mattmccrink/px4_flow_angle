@@ -120,6 +120,24 @@ parameters:
         decimal: 4
         default: 1.0
 
+      # per-channel zero offsets (Pa), captured by `flow_angle null`; non-durable,
+      # re-null per session. Subtracted from raw dp before the reduction.
+      FA_OFF_A:
+        description: {short: Alpha zero offset (Pa)}
+        type: float
+        decimal: 2
+        default: 0.0
+      FA_OFF_AS:
+        description: {short: Airspeed zero offset (Pa)}
+        type: float
+        decimal: 2
+        default: 0.0
+      FA_OFF_B:
+        description: {short: Beta zero offset (Pa)}
+        type: float
+        decimal: 2
+        default: 0.0
+
   - group: Flow Angle Wiring
     definitions:
       # channel = PCA9545A channel index 0..3 (driver forms the select byte 1<<ch)

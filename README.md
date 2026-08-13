@@ -4,7 +4,7 @@ Out-of-tree PX4 driver for a five-hole probe: three **MS4515DO** digital pressur
 sensors behind a **PCA9545A** I²C switch, publishing angle-of-attack / sideslip
 (alpha/beta), dynamic pressure, and airspeed into the PX4 flight stack.
 
-**Version: 0.3.0** &nbsp;·&nbsp; **Target: PX4 v1.17.0, board `px4_fmu-v5_default` (Pixhawk 4)**
+**Version: 0.3.1** &nbsp;·&nbsp; **Target: PX4 v1.17.0, board `px4_fmu-v5_default` (Pixhawk 4)**
 
 This document takes you from a bare machine to a flashed, running driver. If you
 are a student picking this up: read the whole "Build from a clean checkout"
@@ -261,7 +261,16 @@ with status `0` (Normal) and sane counts at `0x46` on channels 0, 1, 2, and `--`
 everywhere else. `flow_angle scan N` streams N frames per channel with decoded
 counts and Pa — apply pressure and watch the numbers move to confirm a channel's
 sense element is alive. `status` also prints each channel's last raw 4 bytes and
-reject reason. Note: plain `i2cdetect -b 4` only ever sees `0x70` — it cannot look
+reject reason.
+
+**Zeroing before calibration:** with the probe **capped (no flow)**, run
+`flow_angle null` (or `null N` to average N samples) to capture each channel's
+zero offset into `FA_OFF_A/AS/B`, then `param save` to persist. The offsets are
+subtracted from the raw differentials before the angle reduction — essential
+because the alpha/beta differentials are tiny near-zero values that a residual
+offset corrupts badly at low q. Re-null per session (the zero drifts with
+temperature); this is separate from QGC's airspeed calibration, which only knows
+the pitot channel. Note: plain `i2cdetect -b 4` only ever sees `0x70` — it cannot look
 behind the mux because it doesn't drive the channel-select register; `scan` does.
 
 ```
@@ -301,6 +310,7 @@ before parameters generate.
 | `FA_RHO` | 1.225 | Air density for the TAS estimate. |
 | `FA_OUT_TYP` | 1 | MS4515DO output type: 0 = A (10–90 %), 1 = B (5–95 %). Our parts are B. |
 | `FA_CAL_A` / `FA_CAL_B` | 1.0 | Placeholder alpha/beta reduction gains (replaced by the milestone-3 tunnel map). |
+| `FA_OFF_A` / `FA_OFF_AS` / `FA_OFF_B` | 0.0 | Per-channel zero offset (Pa), set by `flow_angle null`; subtracted from raw dp before the reduction. Non-durable — re-null per session. |
 | `FA_{A,AS,B}_CH` | 0/1/2 | Mux channel index per sensor (alpha / airspeed / beta). |
 | `FA_{A,AS,B}_ADDR` | 70 | Sensor I²C address, decimal (70 = 0x46). |
 | `FA_{A,AS,B}_RNG` | 4/20/4 | Sensor full-scale, inH₂O. |
@@ -408,6 +418,7 @@ for a first hardware bring-up, and it means you're advancing through real layers
 
 ## 11. Version history
 
+- **0.3.1** — `flow_angle null` captures a per-channel zero offset from no-flow samples (probe capped), stored in `FA_OFF_A/AS/B` params and subtracted from raw dp before the reduction (temperature-aware seam for a future thermal null). The published `differential_pressure` stays raw (stock airspeed selector keeps its own `SENS_DPRES_OFF`).
 - **0.3.0** — human-readable per-channel sensor config on the SD card (`/fs/microsd/etc/flow_angle/config.txt`, `FA_CFG_SD`), with per-channel range/units/output-type; boot-time temperature-sanity acceptance gate (`status` marks a channel `UNVERIFIED` if it isn't converting); sample `extras.txt` autostart. Shares the load/parse/validate/fallback skeleton the milestone-3 calibration LUT will reuse.
 - **0.2.6** — low-power wake levers: `FA_CONV_US` (post-MR wait) and `FA_MR_MODE` (0 = data-byte / 1 = address-only measurement request), to diagnose a stuck low-power airspeed part; MR handling centralized in `send_mr()`.
 - **0.2.5** — `scan` now runs on the command thread (output reaches the MAVLink console), prints full 4-byte frames, and pauses the sample loop for a clean bus; `flow_angle scan N` streams N frames/channel to watch counts under applied pressure; `status` shows the last raw frame + reject reason per channel.

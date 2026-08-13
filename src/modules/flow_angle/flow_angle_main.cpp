@@ -41,6 +41,8 @@ $ flow_angle start -b 4 -a 0x70 -f 400
 	PRINT_MODULE_USAGE_COMMAND_DESCR("scan",
 					 "Sweep channels x {0x28,0x36,0x46,0x48}, printing full frame bytes. "
 					 "'scan N' streams N frames/channel so you can watch counts under applied pressure.");
+	PRINT_MODULE_USAGE_COMMAND_DESCR("null",
+					 "Capture per-channel zero offset from no-flow samples (probe capped). 'null N' averages N samples.");
 	PRINT_MODULE_USAGE_DEFAULT_COMMANDS();
 }
 
@@ -75,6 +77,13 @@ extern "C" __EXPORT int flow_angle_main(int argc, char *argv[])
 
 		// run on the COMMAND thread (false) so output reaches this console; the
 		// driver pauses its sample loop internally for the duration.
+		return ThisDriver::module_custom_method(cli, iterator, false);
+
+	} else if (!strcmp(verb, "null")) {
+		// `flow_angle null [N]`: capture per-channel zero from N no-flow samples.
+		if (argc >= 3) { int n = atoi(argv[argc - 1]); if (n > 0) { cli.custom1 = n; } }
+
+		cli.custom2 = 1;   // select the null sub-command
 		return ThisDriver::module_custom_method(cli, iterator, false);
 	}
 

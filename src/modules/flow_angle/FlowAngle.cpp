@@ -57,6 +57,9 @@ void FlowAngle::load_parameters()
 	get_f("FA_RHO",    _rho);
 	get_f("FA_CAL_A",  _cal_a);
 	get_f("FA_CAL_B",  _cal_b);
+	get_f("FA_OFF_A",  _off[(int)Role::ALPHA]);
+	get_f("FA_OFF_AS", _off[(int)Role::PITOT]);
+	get_f("FA_OFF_B",  _off[(int)Role::BETA]);
 
 	if (_rate_hz < 1.f)  { _rate_hz = 50.f; }
 	if (_rho     < 0.1f) { _rho = 1.225f; }
@@ -397,6 +400,14 @@ float FlowAngle::transfer_fn(int16_t bridge, const ChannelCfg &c) const
 	       / (c.out_span * FULL_SCALE) + c.p_min_pa;
 }
 
+float FlowAngle::apply_offset(Role r, float raw_pa, float temp_c) const
+{
+	// Scalar per-channel zero captured by `flow_angle null`. temp_c is the seam for
+	// a future temperature-dependent offset (M3 oven cal); unused for now.
+	(void)temp_c;
+	return raw_pa - _off[(int)r];
+}
+
 FlowAngle::FrameResult FlowAngle::read_frame(const ChannelCfg &c, ChannelSample &out, uint8_t raw[4])
 {
 	// mux already selected for this channel; retarget to the sensor and fetch 4 bytes.
@@ -630,9 +641,13 @@ void FlowAngle::publish_cycle()
 	}
 
 	// --- 5-hole reduction (PLACEHOLDER linear model; milestone 3 = Calspan map) ---
-	const float q  = (pitot && pitot->ok) ? fmaxf(pitot->press_pa, 0.f) : 0.f;
-	const float dpa = (a && a->ok) ? a->press_pa : 0.f;
-	const float dpb = (b && b->ok) ? b->press_pa : 0.f;
+	// 5-hole reduction inputs, offset-corrected (nulled) via apply_offset(). Note the
+	// published differential_pressure above stays RAW -- the stock airspeed selector
+	// applies its own SENS_DPRES_OFF, so double-correcting there would be wrong. Our
+	// internal q / dp_alpha / dp_beta use the flow_angle zero.
+	const float q  = (pitot && pitot->ok) ? fmaxf(apply_offset(Role::PITOT, pitot->press_pa, pitot->temp_c), 0.f) : 0.f;
+	const float dpa = (a && a->ok) ? apply_offset(Role::ALPHA, a->press_pa, a->temp_c) : 0.f;
+	const float dpb = (b && b->ok) ? apply_offset(Role::BETA,  b->press_pa, b->temp_c) : 0.f;
 
 	const bool valid = pitot && pitot->ok && a && a->ok && b && b->ok && (q > _q_min);
 
@@ -713,17 +728,33 @@ void FlowAngle::custom_method(const BusCLIArguments &cli)
 	// Runs on the COMMAND thread (module_custom_method(..., run_on_work_queue=false)),
 	// so PX4_INFO reaches the same console as `start`/`status`. Since we are no longer
 	// serialized by the work queue, park RunImpl via _pause and let it quiesce before
-	// touching the bus.
+	// touching the bus. cli.custom2 selects the sub-command (0=scan, 1=null).
 	if (!_bus_ready) {
-		PX4_WARN("scan needs the bus initialized -- start with FA_SIM_EN 0 first");
+		PX4_WARN("needs the bus initialized -- start with FA_SIM_EN 0 first");
 		return;
 	}
-
-	const int stream = cli.custom1;   // `flow_angle scan N` -> stream N frames/channel
 
 	_pause.store(true);
 	px4_usleep(3 * (uint32_t)(1e6f / _rate_hz) + 20000);   // wait for RunImpl to park
 
+	if (cli.custom2 == 1) {
+		do_null(cli.custom1);
+
+	} else {
+		do_scan(cli.custom1);
+	}
+
+	set_device_address(_mux_addr);
+	mux_select(0x00);
+
+	// resume the sample loop cleanly from the top of a cycle
+	_ch_idx = 0;
+	_phase = Phase::MEASURE;
+	_pause.store(false);
+}
+
+void FlowAngle::do_scan(int stream)
+{
 	static constexpr uint8_t kAddrs[] = {0x28, 0x36, 0x46, 0x48};   // I / J / K / 0
 
 	if (stream > 1) {
@@ -765,7 +796,7 @@ void FlowAngle::custom_method(const BusCLIArguments &cli)
 
 	} else {
 		// presence sweep: every channel x every candidate address, full frame bytes.
-		PX4_INFO("PCA9545A channel x MS4515DO address sweep (full frame):");
+		PX4_INFO("PCA9545A channel x MS45x address sweep (full frame):");
 		PX4_INFO(" ch  addr  raw bytes      st  counts");
 
 		for (uint8_t ch = 0; ch < 4; ch++) {
@@ -796,14 +827,68 @@ void FlowAngle::custom_method(const BusCLIArguments &cli)
 		}
 	}
 
-	set_device_address(_mux_addr);
-	mux_select(0x00);
-
-	// resume the sample loop cleanly from the top of a cycle
-	_ch_idx = 0;
-	_phase = Phase::MEASURE;
-	_pause.store(false);
 	PX4_INFO("scan done");
+}
+
+void FlowAngle::do_null(int n)
+{
+	if (n < 1) { n = 50; }
+
+	PX4_INFO("nulling %d samples/channel -- probe MUST be capped (no flow):", n);
+
+	for (int i = 0; i < N_CH; i++) {
+		const ChannelCfg &c = _cfg[i];
+		double sum = 0.0;
+		int got = 0;
+
+		for (int k = 0; k < n; k++) {
+			if (mux_select(c.mux_bit) != PX4_OK) { continue; }
+			if (send_mr(c.addr) != PX4_OK) { continue; }
+
+			px4_usleep(_conv_us);
+			uint8_t d[4] {};
+
+			if (transfer(nullptr, 0, d, 4) != PX4_OK) { continue; }
+
+			if (((d[0] & 0b1100'0000) >> 6) != (uint8_t)Status::Normal) { continue; }
+
+			const int16_t bridge = ((d[0] & 0b0011'1111) << 8) | d[1];
+			const float pa = transfer_fn(bridge, c);
+
+			if (pa < c.p_min_pa || pa > c.p_max_pa) { continue; }   // reject railed frames
+
+			sum += pa;
+			got++;
+			px4_usleep(2000);
+		}
+
+		if (got < n / 2) {
+			PX4_WARN("  ch%d %-8s: only %d/%d good samples -- NOT nulled", i, role_str(c.role), got, n);
+			continue;
+		}
+
+		const float mean = (float)(sum / got);
+		const float ceiling = 0.25f * c.p_max_pa;   // sanity: reject obvious flow / fault
+
+		if (fabsf(mean) > ceiling) {
+			PX4_WARN("  ch%d %-8s: mean %.1f Pa > %.0f Pa cap -- flow present or fault? NOT nulled",
+				 i, role_str(c.role), (double)mean, (double)ceiling);
+			continue;
+		}
+
+		_off[(int)c.role] = mean;   // live effect immediately
+
+		const char *pname = (c.role == Role::ALPHA) ? "FA_OFF_A"
+				    : (c.role == Role::PITOT) ? "FA_OFF_AS" : "FA_OFF_B";
+		param_t ph = param_find(pname);
+
+		if (ph != PARAM_INVALID) { param_set(ph, &mean); }
+
+		PX4_INFO("  ch%d %-8s: offset = %.2f Pa (%d samples) -> %s",
+			 i, role_str(c.role), (double)mean, got, pname);
+	}
+
+	PX4_INFO("null done. Run 'param save' to persist across reboot.");
 }
 
 void FlowAngle::print_status()
