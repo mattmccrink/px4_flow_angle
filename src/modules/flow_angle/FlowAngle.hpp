@@ -4,7 +4,7 @@
 
 // Bump this on every released tarball. Printed on start, in `flow_angle status`,
 // and in the usage text; grep-able in source to confirm which tree is in play.
-#define FLOW_ANGLE_VERSION "0.3.1"
+#define FLOW_ANGLE_VERSION "0.3.2"
 
 // Human-readable channel config on the SD card (see README for the format).
 #define FA_CONFIG_PATH    "/fs/microsd/etc/flow_angle/config.txt"

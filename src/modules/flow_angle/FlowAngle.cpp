@@ -838,7 +838,7 @@ void FlowAngle::do_null(int n)
 
 	for (int i = 0; i < N_CH; i++) {
 		const ChannelCfg &c = _cfg[i];
-		double sum = 0.0;
+		float sum = 0.f;
 		int got = 0;
 
 		for (int k = 0; k < n; k++) {
@@ -867,7 +867,7 @@ void FlowAngle::do_null(int n)
 			continue;
 		}
 
-		const float mean = (float)(sum / got);
+		const float mean = sum / (float)got;
 		const float ceiling = 0.25f * c.p_max_pa;   // sanity: reject obvious flow / fault
 
 		if (fabsf(mean) > ceiling) {

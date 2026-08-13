@@ -4,7 +4,7 @@ Out-of-tree PX4 driver for a five-hole probe: three **MS4515DO** digital pressur
 sensors behind a **PCA9545A** I²C switch, publishing angle-of-attack / sideslip
 (alpha/beta), dynamic pressure, and airspeed into the PX4 flight stack.
 
-**Version: 0.3.1** &nbsp;·&nbsp; **Target: PX4 v1.17.0, board `px4_fmu-v5_default` (Pixhawk 4)**
+**Version: 0.3.2** &nbsp;·&nbsp; **Target: PX4 v1.17.0, board `px4_fmu-v5_default` (Pixhawk 4)**
 
 This document takes you from a bare machine to a flashed, running driver. If you
 are a student picking this up: read the whole "Build from a clean checkout"
@@ -418,6 +418,7 @@ for a first hardware bring-up, and it means you're advancing through real layers
 
 ## 11. Version history
 
+- **0.3.2** — build fix: null accumulator kept in float (PX4 `-Werror=double-promotion`). Supersedes 0.3.1.
 - **0.3.1** — `flow_angle null` captures a per-channel zero offset from no-flow samples (probe capped), stored in `FA_OFF_A/AS/B` params and subtracted from raw dp before the reduction (temperature-aware seam for a future thermal null). The published `differential_pressure` stays raw (stock airspeed selector keeps its own `SENS_DPRES_OFF`).
 - **0.3.0** — human-readable per-channel sensor config on the SD card (`/fs/microsd/etc/flow_angle/config.txt`, `FA_CFG_SD`), with per-channel range/units/output-type; boot-time temperature-sanity acceptance gate (`status` marks a channel `UNVERIFIED` if it isn't converting); sample `extras.txt` autostart. Shares the load/parse/validate/fallback skeleton the milestone-3 calibration LUT will reuse.
 - **0.2.6** — low-power wake levers: `FA_CONV_US` (post-MR wait) and `FA_MR_MODE` (0 = data-byte / 1 = address-only measurement request), to diagnose a stuck low-power airspeed part; MR handling centralized in `send_mr()`.
