@@ -4,7 +4,7 @@
 
 // Bump this on every released tarball. Printed on start, in `flow_angle status`,
 // and in the usage text; grep-able in source to confirm which tree is in play.
-#define FLOW_ANGLE_VERSION "0.4.2"
+#define FLOW_ANGLE_VERSION "0.5.0"
 
 // Human-readable channel config on the SD card (see README for the format).
 #define FA_CONFIG_PATH    "/fs/microsd/etc/flow_angle/config.txt"
@@ -141,6 +141,7 @@ private:
 	static const char *role_str(Role r);
 	bool  load_config_file();                          // read/parse the SD config; false -> defaults
 	void  verify_channels();                           // boot-time presence + temperature-sanity gate
+	void  update_health();                             // per-cycle health monitor -> QGC alerts
 	void  enforce_dpres_off();                          // clear (or warn on) stock SENS_DPRES_OFF
 	void  do_scan(int stream);                         // `scan` sub-command (command thread)
 	void  do_null(int n);                              // `null` sub-command: capture per-channel zero
@@ -180,6 +181,13 @@ private:
 	int32_t _mr_mode{0};      // FA_MR_MODE: 0 = 1-byte 0x00 write, 1 = address-only write
 	uint8_t _last_tries[N_CH] {};   // re-reads needed on the last cycle, per channel
 	hrt_abstime _last_dbg{0};       // raw-log rate limiter
+
+	// mid-flight health monitor -> QGC alerts
+	orb_advert_t _mavlink_log_pub{nullptr};
+	uint32_t    _fail_count[N_CH] {};   // consecutive failed cycles, per channel
+	bool        _ch_failed[N_CH] {};    // latched "failed" state (debounced)
+	hrt_abstime _last_alert[N_CH] {};   // last QGC alert time, per channel
+	int32_t     _fail_ms{1000};         // FA_FAIL_MS: dropout time before alerting
 	float   _rate_hz{50.f};
 	float   _q_min{20.f};
 	float   _rho{1.225f};

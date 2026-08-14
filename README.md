@@ -4,7 +4,7 @@ An out-of-tree PX4 driver for a five-hole probe. It reads three MS45x differenti
 pressure sensors behind a PCA9545A I2C switch and publishes angle of attack,
 sideslip, dynamic pressure, and airspeed.
 
-**Version: 0.4.2. Target: PX4 v1.17.0, board `px4_fmu-v5_default` (Pixhawk 4).**
+**Version: 0.5.0. Target: PX4 v1.17.0, board `px4_fmu-v5_default` (Pixhawk 4).**
 
 ---
 
@@ -210,6 +210,15 @@ it clears the stock `SENS_DPRES_OFF` to 0 at each start and logs a warning if it
 was not zero. This prevents a stale stock offset from stacking on the driver's
 zero across reboots. Set `FA_ZERO_DPRES = 0` to only warn.
 
+### In-flight failure alert
+
+The driver monitors each channel during flight. If a channel returns no valid
+frame for `FA_FAIL_MS` (default 1000 ms), the driver posts a QGroundControl alert
+(STATUSTEXT) and marks the channel `FAILED` in `flow_angle status`. It re-posts the
+alert every 30 s while the channel stays failed. The airspeed channel and the
+alpha/beta channels use separate messages, because airspeed loss also affects the
+airspeed estimate and EKF2.
+
 ### Autostart
 
 PX4 runs `/fs/microsd/etc/extras.txt` from the SD card late in boot. The sample
@@ -234,6 +243,7 @@ see a bad config or a dead sensor.
 | `FA_CFG_SD` | 1 | 1 = load the SD config at start. 0 = use compiled defaults. |
 | `FA_ZERO_DPRES` | 1 | 1 = clear `SENS_DPRES_OFF` to 0 at start. 0 = warn only. |
 | `FA_RATE` | 50 | Sample rate, Hz. |
+| `FA_FAIL_MS` | 1000 | Dropout time (ms) before a QGC failure alert. |
 | `FA_Q_MIN` | 20 | Minimum dynamic pressure (Pa) for a valid angle. |
 | `FA_RHO` | 1.225 | Air density for the airspeed estimate. |
 | `FA_CONV_US` | 5000 | Wait after a measurement request, µs. |

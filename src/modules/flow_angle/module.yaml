@@ -81,6 +81,19 @@ parameters:
           1: Address-only write
         default: 0
 
+      FA_FAIL_MS:
+        description:
+          short: Dropout time before a QGC failure alert
+          long: |
+            If a channel returns no valid frame for this long, the driver declares
+            it failed and posts a QGoundControl alert (STATUSTEXT). Debounces brief
+            I2C hiccups. It also re-posts every 30 s while the channel stays failed.
+        type: int32
+        unit: ms
+        min: 100
+        max: 60000
+        default: 1000
+
       FA_RATE:
         description:
           short: Sample rate

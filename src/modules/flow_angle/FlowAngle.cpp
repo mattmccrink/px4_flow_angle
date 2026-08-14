@@ -2,6 +2,7 @@
 
 #include <px4_platform_common/log.h>
 #include <px4_platform_common/posix.h>
+#include <systemlib/mavlink_log.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -45,6 +46,7 @@ void FlowAngle::load_parameters()
 	get_i("FA_DBG_RAW", _dbg_raw);
 	get_i("FA_CFG_SD", _cfg_sd);
 	get_i("FA_ZERO_DPRES", _zero_dpres);
+	get_i("FA_FAIL_MS", _fail_ms);
 	get_i("FA_MR_MODE", _mr_mode);
 
 	int32_t conv = (int32_t)_conv_us;
@@ -313,6 +315,52 @@ void FlowAngle::verify_channels()
 
 	set_device_address(_mux_addr);
 	mux_select(0x00);
+}
+
+void FlowAngle::update_health()
+{
+	// Runs once per cycle. Declares a channel failed after ~_fail_ms of continuous
+	// dropouts (debounced against transient I2C hiccups), and alerts QGC on the
+	// healthy->failed and failed->healthy edges. Re-alerts every 30 s while failed,
+	// so the message stays visible on a long flight.
+	const hrt_abstime now = hrt_absolute_time();
+	const float fc = (float)_fail_ms * _rate_hz / 1000.f;
+	const uint32_t fail_cycles = (fc < 1.f) ? 1u : (uint32_t)fc;
+
+	for (int i = 0; i < N_CH; i++) {
+		const bool ok = _samp[i].ok;
+		const Role role = _cfg[i].role;
+
+		if (ok) {
+			_fail_count[i] = 0;
+
+			if (_ch_failed[i]) {
+				_ch_failed[i] = false;
+				mavlink_log_info(&_mavlink_log_pub, "flow_angle: %s sensor recovered", role_str(role));
+			}
+
+			continue;
+		}
+
+		if (_fail_count[i] < 0xFFFFFFFF) { _fail_count[i]++; }
+
+		const bool cross = (!_ch_failed[i] && _fail_count[i] >= fail_cycles);
+		const bool renotify = (_ch_failed[i] && (now - _last_alert[i]) > 30_s);
+
+		if (cross || renotify) {
+			_ch_failed[i] = true;
+			_last_alert[i] = now;
+
+			if (role == Role::PITOT) {
+				mavlink_log_critical(&_mavlink_log_pub,
+						     "flow_angle: AIRSPEED sensor lost -- airspeed/EKF2 affected");
+
+			} else {
+				mavlink_log_critical(&_mavlink_log_pub,
+						     "flow_angle: %s sensor lost -- flow-angle data affected", role_str(role));
+			}
+		}
+	}
 }
 
 void FlowAngle::enforce_dpres_off()
@@ -661,6 +709,8 @@ void FlowAngle::publish_cycle()
 {
 	const hrt_abstime now = hrt_absolute_time();
 
+	update_health();   // per-channel dropout monitor -> QGC alerts
+
 	const ChannelSample *pitot = sample_for(Role::PITOT);
 	const ChannelSample *a     = sample_for(Role::ALPHA);
 	const ChannelSample *b     = sample_for(Role::BETA);
@@ -942,11 +992,12 @@ void FlowAngle::print_status()
 
 	for (int i = 0; i < N_CH; i++) {
 		const ChannelCfg &c = _cfg[i];
+		const char *flag = _ch_failed[i] ? " FAILED" : (c.verified ? "" : " UNVERIFIED");
 		PX4_INFO("  ch%u %-8s addr=0x%02x P[%.0f..%.0f]Pa last=%.2fPa %s%s (retries=%u)",
 			 (unsigned)__builtin_ctz(c.mux_bit), role_str(c.role), (unsigned)c.addr,
 			 (double)c.p_min_pa, (double)c.p_max_pa,
 			 (double)_samp[i].press_pa, _samp[i].ok ? "ok" : "--",
-			 c.verified ? "" : " UNVERIFIED", (unsigned)_last_tries[i]);
+			 flag, (unsigned)_last_tries[i]);
 		PX4_INFO("        raw=%02x %02x %02x %02x st=%u -> %s",
 			 _last_raw[i][0], _last_raw[i][1], _last_raw[i][2], _last_raw[i][3],
 			 (unsigned)((_last_raw[i][0] >> 6) & 0x3), result_str(_last_result[i]));
