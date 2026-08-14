@@ -44,6 +44,7 @@ void FlowAngle::load_parameters()
 	get_i("FA_SIM_EN", _sim_en);
 	get_i("FA_DBG_RAW", _dbg_raw);
 	get_i("FA_CFG_SD", _cfg_sd);
+	get_i("FA_ZERO_DPRES", _zero_dpres);
 	get_i("FA_MR_MODE", _mr_mode);
 
 	int32_t conv = (int32_t)_conv_us;
@@ -314,7 +315,7 @@ void FlowAngle::verify_channels()
 	mux_select(0x00);
 }
 
-void FlowAngle::check_dpres_off()
+void FlowAngle::enforce_dpres_off()
 {
 	param_t h = param_find("SENS_DPRES_OFF");
 
@@ -323,10 +324,22 @@ void FlowAngle::check_dpres_off()
 	float off = 0.f;
 	param_get(h, &off);
 
-	if (fabsf(off) > 0.001f) {
+	if (fabsf(off) <= 0.001f) { return; }   // already zero
+
+	if (_zero_dpres != 0) {
+		// flow_angle owns the airspeed zero (via FA_OFF_AS + flow_angle null). Clear
+		// the stock offset so it cannot stack. param_set notifies the airspeed selector
+		// to re-read; we do not param_save, so it is re-cleared every boot without a
+		// flash write. Disable with FA_ZERO_DPRES=0.
+		const float zero = 0.f;
+		param_set(h, &zero);
+		PX4_WARN("SENS_DPRES_OFF was %.2f; forced to 0 so flow_angle owns the airspeed zero (FA_ZERO_DPRES=1).",
+			 (double)off);
+
+	} else {
 		PX4_WARN("SENS_DPRES_OFF=%.2f is nonzero: the stock airspeed offset STACKS on the flow_angle null.",
 			 (double)off);
-		PX4_WARN("Run 'param set SENS_DPRES_OFF 0' so flow_angle owns the airspeed zero.");
+		PX4_WARN("Run 'param set SENS_DPRES_OFF 0', or set FA_ZERO_DPRES=1 to clear it automatically.");
 	}
 }
 
@@ -365,7 +378,7 @@ int FlowAngle::init()
 	// actually converting (temperature reads ambient, not the -50C reset rail).
 	verify_channels();
 
-	check_dpres_off();   // warn if the stock airspeed offset would stack on our null
+	enforce_dpres_off();   // warn if the stock airspeed offset would stack on our null
 
 	set_device_address(_mux_addr);
 	mux_select(0x00); // leave all channels deselected until the first cycle
@@ -916,7 +929,7 @@ void FlowAngle::do_null(int n)
 	}
 
 	PX4_INFO("null done. Run 'param save' to persist across reboot.");
-	check_dpres_off();   // remind: the stock offset stacks on this null if nonzero
+	enforce_dpres_off();   // remind: the stock offset stacks on this null if nonzero
 }
 
 void FlowAngle::print_status()

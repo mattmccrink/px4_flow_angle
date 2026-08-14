@@ -4,7 +4,7 @@
 
 // Bump this on every released tarball. Printed on start, in `flow_angle status`,
 // and in the usage text; grep-able in source to confirm which tree is in play.
-#define FLOW_ANGLE_VERSION "0.4.1"
+#define FLOW_ANGLE_VERSION "0.4.2"
 
 // Human-readable channel config on the SD card (see README for the format).
 #define FA_CONFIG_PATH    "/fs/microsd/etc/flow_angle/config.txt"
@@ -141,7 +141,7 @@ private:
 	static const char *role_str(Role r);
 	bool  load_config_file();                          // read/parse the SD config; false -> defaults
 	void  verify_channels();                           // boot-time presence + temperature-sanity gate
-	void  check_dpres_off();                           // warn if SENS_DPRES_OFF would stack on our null
+	void  enforce_dpres_off();                          // clear (or warn on) stock SENS_DPRES_OFF
 	void  do_scan(int stream);                         // `scan` sub-command (command thread)
 	void  do_null(int n);                              // `null` sub-command: capture per-channel zero
 	float apply_offset(Role r, float raw_pa, float temp_c) const; // subtract the channel zero
@@ -175,6 +175,7 @@ private:
 	int32_t _sim_en{0};   // default HW; FA_SIM_EN=1 (param) re-enables the synthetic path
 	int32_t _dbg_raw{0};  // FA_DBG_RAW=1 -> dump raw 4-byte frames (rate-limited)
 	int32_t _cfg_sd{1};   // FA_CFG_SD=1 -> load channel config from the SD card at boot
+	int32_t _zero_dpres{1};// FA_ZERO_DPRES=1 -> force SENS_DPRES_OFF=0 at start
 	uint32_t _conv_us{5000};  // FA_CONV_US: post-MR conversion/wake wait [us]
 	int32_t _mr_mode{0};      // FA_MR_MODE: 0 = 1-byte 0x00 write, 1 = address-only write
 	uint8_t _last_tries[N_CH] {};   // re-reads needed on the last cycle, per channel

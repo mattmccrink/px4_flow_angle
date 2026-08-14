@@ -4,7 +4,7 @@ An out-of-tree PX4 driver for a five-hole probe. It reads three MS45x differenti
 pressure sensors behind a PCA9545A I2C switch and publishes angle of attack,
 sideslip, dynamic pressure, and airspeed.
 
-**Version: 0.4.1. Target: PX4 v1.17.0, board `px4_fmu-v5_default` (Pixhawk 4).**
+**Version: 0.4.2. Target: PX4 v1.17.0, board `px4_fmu-v5_default` (Pixhawk 4).**
 
 ---
 
@@ -205,8 +205,10 @@ per-channel offsets in `FA_OFF_A`, `FA_OFF_AS`, and `FA_OFF_B`, and subtracts th
 before the reduction. The zero drifts with temperature. Re-null each session.
 
 Use `flow_angle null` for the airspeed zero, not the QGroundControl airspeed
-calibration. Keep `SENS_DPRES_OFF = 0`. If it is not zero, its offset adds to the
-driver's offset. The driver warns you at start and after `null` if it is not zero.
+calibration. The driver owns the airspeed zero. With `FA_ZERO_DPRES = 1` (default),
+it clears the stock `SENS_DPRES_OFF` to 0 at each start and logs a warning if it
+was not zero. This prevents a stale stock offset from stacking on the driver's
+zero across reboots. Set `FA_ZERO_DPRES = 0` to only warn.
 
 ### Autostart
 
@@ -230,6 +232,7 @@ see a bad config or a dead sensor.
 | `FA_MUX_ADDR` | 112 | PCA9545A address (decimal; 112 = 0x70). |
 | `FA_SIM_EN` | 0 | 0 = read hardware. 1 = synthetic path, no I2C. |
 | `FA_CFG_SD` | 1 | 1 = load the SD config at start. 0 = use compiled defaults. |
+| `FA_ZERO_DPRES` | 1 | 1 = clear `SENS_DPRES_OFF` to 0 at start. 0 = warn only. |
 | `FA_RATE` | 50 | Sample rate, Hz. |
 | `FA_Q_MIN` | 20 | Minimum dynamic pressure (Pa) for a valid angle. |
 | `FA_RHO` | 1.225 | Air density for the airspeed estimate. |

@@ -78,6 +78,9 @@ extern "C" __EXPORT int flow_angle_main(int argc, char *argv[])
 	cli.bus_option = I2CSPIBusOption::I2CExternal;
 	cli.requested_bus = -1;
 	cli.i2c_address = (uint8_t)fa_mux;
+	cli.bus_frequency = I2C_SPEED;   // resolved per-bus frequency; the no-flag parse
+					 // path leaves this at 0, which the iterator rejects
+					 // as "too slow / device max 0 KHz". Set it explicitly.
 
 	BusInstanceIterator iterator(MODULE_NAME, cli, DRV_DIFF_PRESS_DEVTYPE_MS4525DO);
 

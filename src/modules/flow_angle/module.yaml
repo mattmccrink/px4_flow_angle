@@ -32,6 +32,17 @@ parameters:
         type: boolean
         default: 1
 
+      FA_ZERO_DPRES:
+        description:
+          short: Force SENS_DPRES_OFF to 0 at start
+          long: |
+            When 1, clear the stock differential-pressure offset SENS_DPRES_OFF at
+            driver start so flow_angle owns the airspeed zero (use flow_angle null).
+            This prevents a stale stock offset from stacking on the flow_angle zero
+            across field reboots. When 0, the driver only warns if it is nonzero.
+        type: boolean
+        default: 1
+
       FA_DBG_RAW:
         description:
           short: Dump raw sensor frames (debug)
