@@ -136,6 +136,13 @@ static float fa_unit_to_pa(const char *u)
 	return -1.f;   // unknown
 }
 
+static float fa_temp_c(const uint8_t d[4])
+{
+	// 11-bit temperature field -> degrees C
+	const int16_t t11 = ((d[2] << 8) + (0b1110'0000 & d[3])) / (1 << 5);
+	return (200.f * t11) / 2047.f - 50.f;
+}
+
 bool FlowAngle::load_config_file()
 {
 	FILE *f = fopen(FA_CONFIG_PATH, "r");
@@ -281,8 +288,7 @@ void FlowAngle::verify_channels()
 			uint8_t d[4] {};
 
 			if (transfer(nullptr, 0, d, 4) == PX4_OK) {
-				const int16_t t11 = ((d[2] << 8) + (0b1110'0000 & d[3])) / (1 << 5);
-				temp = (200.f * t11) / 2047.f - 50.f;
+				temp = fa_temp_c(d);
 				got = true;
 			}
 		}
@@ -306,6 +312,22 @@ void FlowAngle::verify_channels()
 
 	set_device_address(_mux_addr);
 	mux_select(0x00);
+}
+
+void FlowAngle::check_dpres_off()
+{
+	param_t h = param_find("SENS_DPRES_OFF");
+
+	if (h == PARAM_INVALID) { return; }
+
+	float off = 0.f;
+	param_get(h, &off);
+
+	if (fabsf(off) > 0.001f) {
+		PX4_WARN("SENS_DPRES_OFF=%.2f is nonzero: the stock airspeed offset STACKS on the flow_angle null.",
+			 (double)off);
+		PX4_WARN("Run 'param set SENS_DPRES_OFF 0' so flow_angle owns the airspeed zero.");
+	}
 }
 
 int FlowAngle::init()
@@ -342,6 +364,8 @@ int FlowAngle::init()
 	// Boot-time acceptance gate: confirm each channel's sensor is present AND
 	// actually converting (temperature reads ambient, not the -50C reset rail).
 	verify_channels();
+
+	check_dpres_off();   // warn if the stock airspeed offset would stack on our null
 
 	set_device_address(_mux_addr);
 	mux_select(0x00); // leave all channels deselected until the first cycle
@@ -633,7 +657,10 @@ void FlowAngle::publish_cycle()
 		differential_pressure_s dp{};
 		dp.timestamp_sample = _timestamp_sample;
 		dp.device_id = get_device_id();
-		dp.differential_pressure_pa = pitot->press_pa;
+		// Apply the flow_angle zero here too, so the stock airspeed selector / EKF2 /
+		// VFR_HUD path uses the same offset as our reduction. Keep SENS_DPRES_OFF at 0
+		// so there is exactly one correction (see check_dpres_off).
+		dp.differential_pressure_pa = apply_offset(Role::PITOT, pitot->press_pa, pitot->temp_c);
 		dp.temperature = pitot->temp_c;
 		dp.error_count = perf_event_count(_comms_errors);
 		dp.timestamp = now;
@@ -782,9 +809,9 @@ void FlowAngle::do_scan(int stream)
 				}
 
 				if (got) {
-					PX4_INFO("[%d] ch%d(0x%02x) raw=%02x %02x %02x %02x st=%u cnt=%d %.1fPa",
+					PX4_INFO("[%d] ch%d(0x%02x) raw=%02x %02x %02x %02x st=%u cnt=%d %.1fPa %.1fC",
 						 n, i, (unsigned)c.addr, d[0], d[1], d[2], d[3],
-						 (unsigned)st, counts, (double)pa);
+						 (unsigned)st, counts, (double)pa, (double)fa_temp_c(d));
 
 				} else {
 					PX4_INFO("[%d] ch%d(0x%02x) no reply", n, i, (unsigned)c.addr);
@@ -797,7 +824,7 @@ void FlowAngle::do_scan(int stream)
 	} else {
 		// presence sweep: every channel x every candidate address, full frame bytes.
 		PX4_INFO("PCA9545A channel x MS45x address sweep (full frame):");
-		PX4_INFO(" ch  addr  raw bytes      st  counts");
+		PX4_INFO(" ch  addr  raw bytes      st  counts  temp");
 
 		for (uint8_t ch = 0; ch < 4; ch++) {
 			if (mux_select((uint8_t)(1u << ch)) != PX4_OK) {
@@ -817,8 +844,8 @@ void FlowAngle::do_scan(int stream)
 				if (transfer(nullptr, 0, d, 4) == PX4_OK) {
 					const uint8_t s = (d[0] & 0b1100'0000) >> 6;
 					const int counts = ((d[0] & 0b0011'1111) << 8) | d[1];
-					PX4_INFO("  %u  0x%02x  %02x %02x %02x %02x  %u   %d",
-						 ch, addr, d[0], d[1], d[2], d[3], (unsigned)s, counts);
+					PX4_INFO("  %u  0x%02x  %02x %02x %02x %02x  %u  %6d  %.1fC",
+						 ch, addr, d[0], d[1], d[2], d[3], (unsigned)s, counts, (double)fa_temp_c(d));
 
 				} else {
 					PX4_INFO("  %u  0x%02x  ACK (no DF)", ch, addr);
@@ -889,6 +916,7 @@ void FlowAngle::do_null(int n)
 	}
 
 	PX4_INFO("null done. Run 'param save' to persist across reboot.");
+	check_dpres_off();   // remind: the stock offset stacks on this null if nonzero
 }
 
 void FlowAngle::print_status()

@@ -34,13 +34,13 @@ ch0.units  = inH2O
 ch0.type   = B
 ch0.family = 4515
 
-# --- channel 1: airspeed  (MS4525DO -- EDIT range/units to match YOUR part!) ---
-# NOTE: 4525 parts are specified in psi, NOT inH2O. Set range/units to your part.
+# --- channel 1: airspeed  (MS4525DO-DS5AI001DP: 0x28, +/-1 psi, type A) ---
+# NOTE: 4525 parts use psi (not inH2O) and this part is output type A (not B).
 ch1.role   = airspeed
-ch1.addr   = 0x46
+ch1.addr   = 0x28
 ch1.range  = 1.0
 ch1.units  = psi
-ch1.type   = B
+ch1.type   = A
 ch1.family = 4525
 
 # --- channel 2: sideslip  (MS4515DO, +/-4 inH2O, type B) ---

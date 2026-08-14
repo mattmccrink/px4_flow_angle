@@ -4,7 +4,7 @@
 
 // Bump this on every released tarball. Printed on start, in `flow_angle status`,
 // and in the usage text; grep-able in source to confirm which tree is in play.
-#define FLOW_ANGLE_VERSION "0.3.2"
+#define FLOW_ANGLE_VERSION "0.4.0"
 
 // Human-readable channel config on the SD card (see README for the format).
 #define FA_CONFIG_PATH    "/fs/microsd/etc/flow_angle/config.txt"
@@ -141,6 +141,7 @@ private:
 	static const char *role_str(Role r);
 	bool  load_config_file();                          // read/parse the SD config; false -> defaults
 	void  verify_channels();                           // boot-time presence + temperature-sanity gate
+	void  check_dpres_off();                           // warn if SENS_DPRES_OFF would stack on our null
 	void  do_scan(int stream);                         // `scan` sub-command (command thread)
 	void  do_null(int n);                              // `null` sub-command: capture per-channel zero
 	float apply_offset(Role r, float raw_pa, float temp_c) const; // subtract the channel zero
