@@ -3,15 +3,6 @@ module_name: Flow Angle (5-hole probe)
 parameters:
   - group: Flow Angle
     definitions:
-      FA_BUS:
-        description:
-          short: External I2C bus for the probe
-          long: |
-            PX4 I2C bus number the PCA9545A switch is on. Pixhawk 4 external bus = 4.
-            Read at driver start; the start command takes no bus flags.
-        type: int32
-        default: 4
-
       FA_MUX_ADDR:
         description:
           short: PCA9545A I2C address

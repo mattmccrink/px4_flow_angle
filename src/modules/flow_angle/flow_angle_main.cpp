@@ -24,10 +24,11 @@ sensors behind a PCA9545A I2C switch on an external I2C bus. It publishes
 differential_pressure for the pitot channel and sensor_flow_angle for the
 alpha/beta reduction.
 
-The start command takes no bus arguments. The I2C bus, the switch address, and
-each sensor's address, range and type come from parameters and the SD config
-file (/fs/microsd/etc/flow_angle/config.txt). Set FA_BUS to change the bus
-(default 4). Set FA_SIM_EN=1 for a hardware-less synthetic path.
+The start command takes no bus arguments. The driver probes the external I2C
+buses for the switch. The switch address, and each sensor's address, range and
+type come from parameters and the SD config file
+(/fs/microsd/etc/flow_angle/config.txt). Set FA_SIM_EN=1 for a hardware-less
+synthetic path.
 
 ### Examples
 Start the driver:
@@ -54,12 +55,10 @@ extern "C" __EXPORT int flow_angle_main(int argc, char *argv[])
 {
 	using ThisDriver = FlowAngle;
 
-	// Bus and switch address come from parameters, not CLI flags. This is always
-	// an external I2C sensor.
-	int32_t fa_bus = 4;
+	// The switch address comes from a parameter. This is always an external I2C
+	// sensor, so probe all external buses for it.
 	int32_t fa_mux = 0x70;
-	param_t h = param_find("FA_BUS");       if (h != PARAM_INVALID) { param_get(h, &fa_bus); }
-	h = param_find("FA_MUX_ADDR");          if (h != PARAM_INVALID) { param_get(h, &fa_mux); }
+	param_t h = param_find("FA_MUX_ADDR");  if (h != PARAM_INVALID) { param_get(h, &fa_mux); }
 
 	BusCLIArguments cli{true, false};       // I2C only
 	cli.i2c_address = (uint8_t)fa_mux;
@@ -72,9 +71,12 @@ extern "C" __EXPORT int flow_angle_main(int argc, char *argv[])
 		return -1;
 	}
 
-	// Force the external bus from FA_BUS, ignoring any leftover flags.
+	// Select every external I2C bus and let the probe find the mux. This is what
+	// the `-X` flag did. requested_bus = -1 means "any external bus" -- do NOT set
+	// it to a PX4 bus number here; the iterator treats requested_bus as an internal
+	// enumeration index, not the bus number, so a number matches nothing.
 	cli.bus_option = I2CSPIBusOption::I2CExternal;
-	cli.requested_bus = fa_bus;
+	cli.requested_bus = -1;
 	cli.i2c_address = (uint8_t)fa_mux;
 
 	BusInstanceIterator iterator(MODULE_NAME, cli, DRV_DIFF_PRESS_DEVTYPE_MS4525DO);

@@ -4,7 +4,7 @@ An out-of-tree PX4 driver for a five-hole probe. It reads three MS45x differenti
 pressure sensors behind a PCA9545A I2C switch and publishes angle of attack,
 sideslip, dynamic pressure, and airspeed.
 
-**Version: 0.4.0. Target: PX4 v1.17.0, board `px4_fmu-v5_default` (Pixhawk 4).**
+**Version: 0.4.1. Target: PX4 v1.17.0, board `px4_fmu-v5_default` (Pixhawk 4).**
 
 ---
 
@@ -138,8 +138,8 @@ make px4_fmu-v5_default upload    # Pixhawk 4 on USB
 
 ## 5. Run
 
-The start command takes no bus arguments. The driver uses the `FA_BUS` parameter
-(default 4).
+The start command takes no bus arguments. The driver probes the external I2C
+buses for the switch.
 
 | Command | Action |
 |---------|--------|
@@ -227,7 +227,6 @@ see a bad config or a dead sensor.
 
 | Parameter | Default | Meaning |
 |-----------|:-------:|---------|
-| `FA_BUS` | 4 | External I2C bus number. |
 | `FA_MUX_ADDR` | 112 | PCA9545A address (decimal; 112 = 0x70). |
 | `FA_SIM_EN` | 0 | 0 = read hardware. 1 = synthetic path, no I2C. |
 | `FA_CFG_SD` | 1 | 1 = load the SD config at start. 0 = use compiled defaults. |
