@@ -4,7 +4,7 @@
 
 // Bump this on every released tarball. Printed on start, in `flow_angle status`,
 // and in the usage text; grep-able in source to confirm which tree is in play.
-#define FLOW_ANGLE_VERSION "0.5.0"
+#define FLOW_ANGLE_VERSION "0.6.0"
 
 // Human-readable channel config on the SD card (see README for the format).
 #define FA_CONFIG_PATH    "/fs/microsd/etc/flow_angle/config.txt"
@@ -16,6 +16,7 @@
 #include <px4_platform_common/i2c_spi_buses.h>
 #include <px4_platform_common/atomic.h>
 #include <parameters/param.h>
+#include "ThermalCal.hpp"
 
 #include <uORB/Publication.hpp>
 #include <uORB/PublicationMulti.hpp>
@@ -194,6 +195,8 @@ private:
 	float   _cal_a{1.f};   // placeholder alpha gain; real map is milestone 3
 	float   _cal_b{1.f};   // placeholder beta gain
 	float   _off[3] {0.f, 0.f, 0.f};   // per-role zero offset [alpha, airspeed, beta], Pa (FA_OFF_*)
+	float      _off_temp[3] {20.f, 20.f, 20.f};  // die temp at last null, degC (FA_OFT_*)
+	ThermalCal _therm[3];                        // per-role thermal-offset shape (SD config)
 
 	float   _sim_phase{0.f};
 

@@ -169,7 +169,23 @@ parameters:
         type: float
         decimal: 2
         default: 0.0
-
+      # die temperature (degC) at the last `flow_angle null`; the thermal shape
+      # is referenced to this, so c0 cancels and only drift-since-null is removed.
+      FA_OFT_A:
+        description: {short: Alpha null reference temp (degC)}
+        type: float
+        decimal: 1
+        default: 20.0
+      FA_OFT_AS:
+        description: {short: Airspeed null reference temp (degC)}
+        type: float
+        decimal: 1
+        default: 20.0
+      FA_OFT_B:
+        description: {short: Beta null reference temp (degC)}
+        type: float
+        decimal: 1
+        default: 20.0
   - group: Flow Angle Wiring
     definitions:
       # channel = PCA9545A channel index 0..3 (driver forms the select byte 1<<ch)

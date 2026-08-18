@@ -63,6 +63,9 @@ void FlowAngle::load_parameters()
 	get_f("FA_OFF_A",  _off[(int)Role::ALPHA]);
 	get_f("FA_OFF_AS", _off[(int)Role::PITOT]);
 	get_f("FA_OFF_B",  _off[(int)Role::BETA]);
+	get_f("FA_OFT_A",  _off_temp[(int)Role::ALPHA]);
+	get_f("FA_OFT_AS", _off_temp[(int)Role::PITOT]);
+	get_f("FA_OFT_B",  _off_temp[(int)Role::BETA]);
 
 	if (_rate_hz < 1.f)  { _rate_hz = 50.f; }
 	if (_rho     < 0.1f) { _rho = 1.225f; }
@@ -159,11 +162,18 @@ bool FlowAngle::load_config_file()
 	ChannelCfg tmp[N_CH];
 	float range[N_CH]; float unit[N_CH]; bool bidir[N_CH];
 	bool s_role[N_CH], s_addr[N_CH], s_range[N_CH], s_units[N_CH], s_type[N_CH], touched[N_CH];
+	int   t_order[N_CH]; float t_c0[N_CH], t_c1[N_CH], t_c2[N_CH], t_tmin[N_CH], t_tmax[N_CH];
+	bool  t_seen[N_CH];
 
 	for (int i = 0; i < N_CH; i++) {
 		tmp[i] = _cfg[i];
 		range[i] = 0.f; unit[i] = 0.f; bidir[i] = true;
 		s_role[i] = s_addr[i] = s_range[i] = s_units[i] = s_type[i] = touched[i] = false;
+		t_order[i]=0; 
+		t_c0[i]=t_c1[i]=t_c2[i]=0.f; 
+		t_tmin[i]=0.f; 
+		t_tmax[i]=0.f; 
+		t_seen[i]=false;
 	}
 
 	int file_ver = -1;
@@ -224,6 +234,19 @@ bool FlowAngle::load_config_file()
 
 			} else if (strcmp(fld, "family") == 0) {
 				// informational only (4515 / 4525 share the DF frame format)
+			} else if (strncmp(fld, "therm_", 6) == 0) {
+				const char *tf = fld + 6;
+				if (strcmp(tf, "model") == 0) {
+					if      (strcmp(val, "linear")    == 0) { t_order[ch] = 1; t_seen[ch] = true; }
+					else if (strcmp(val, "quadratic") == 0) { t_order[ch] = 2; t_seen[ch] = true; }
+					else { PX4_WARN("config line %d: bad therm_model '%s'", lineno, val); errors++; }
+				}
+				else if (strcmp(tf, "c0")   == 0) { t_c0[ch]   = strtof(val, nullptr); }
+				else if (strcmp(tf, "c1")   == 0) { t_c1[ch]   = strtof(val, nullptr); }
+				else if (strcmp(tf, "c2")   == 0) { t_c2[ch]   = strtof(val, nullptr); }
+				else if (strcmp(tf, "tmin") == 0) { t_tmin[ch] = strtof(val, nullptr); }
+				else if (strcmp(tf, "tmax") == 0) { t_tmax[ch] = strtof(val, nullptr); }
+				else { PX4_WARN("config line %d: unknown field 'ch%d.%s'", lineno, ch, fld); errors++; }
 
 			} else {
 				PX4_WARN("config line %d: unknown field 'ch%d.%s'", lineno, ch, fld); errors++;
@@ -263,6 +286,17 @@ bool FlowAngle::load_config_file()
 	if (ready == 0) { PX4_WARN("config: no complete channel entries -- using defaults"); return false; }
 
 	for (int i = 0; i < N_CH; i++) { _cfg[i] = tmp[i]; }
+	for (int r = 0; r < 3; r++) { _therm[r] = ThermalCal(); }
+	for (int ch = 0; ch < N_CH; ch++) {
+		if (!t_seen[ch]) { continue; }
+		const int r = (int)_cfg[ch].role;
+		if (_therm[r].set((uint8_t)t_order[ch], t_c0[ch], t_c1[ch], t_c2[ch], t_tmin[ch], t_tmax[ch])) {
+			PX4_INFO("config ch%d %-8s: thermal %s [%.0f..%.0f C]", ch, role_str(_cfg[ch].role),
+				 t_order[ch] == 2 ? "quadratic" : "linear", (double)t_tmin[ch], (double)t_tmax[ch]);
+		} else {
+			PX4_WARN("config ch%d: thermal block invalid -- level-only", ch);
+		}
+	}
 
 	PX4_INFO("config: loaded %s (v%d, %d channel(s), %d parse warning(s))",
 		 FA_CONFIG_PATH, file_ver, ready, errors);
@@ -487,10 +521,16 @@ float FlowAngle::transfer_fn(int16_t bridge, const ChannelCfg &c) const
 
 float FlowAngle::apply_offset(Role r, float raw_pa, float temp_c) const
 {
-	// Scalar per-channel zero captured by `flow_angle null`. temp_c is the seam for
-	// a future temperature-dependent offset (M3 oven cal); unused for now.
-	(void)temp_c;
-	return raw_pa - _off[(int)r];
+	const int i = (int)r;
+	float corrected = raw_pa - _off[i];                 // absolute level (null)
+
+	// Thermal SHAPE, referenced to the die temp at the last null so c0 cancels:
+	// removes only the offset DRIFT since the null. Identity if no cal loaded.
+	if (_therm[i].valid()) {
+		corrected -= _therm[i].delta(temp_c, _off_temp[i]);
+	}
+
+	return corrected;
 }
 
 FlowAngle::FrameResult FlowAngle::read_frame(const ChannelCfg &c, ChannelSample &out, uint8_t raw[4])
@@ -929,6 +969,7 @@ void FlowAngle::do_null(int n)
 	for (int i = 0; i < N_CH; i++) {
 		const ChannelCfg &c = _cfg[i];
 		float sum = 0.f;
+		float tsum = 0.f;
 		int got = 0;
 
 		for (int k = 0; k < n; k++) {
@@ -947,7 +988,9 @@ void FlowAngle::do_null(int n)
 
 			if (pa < c.p_min_pa || pa > c.p_max_pa) { continue; }   // reject railed frames
 
-			sum += pa;
+			const int16_t temp11 = ((d[2] << 8) + (0b1110'0000 & d[3])) / (1 << 5);
+			sum  += pa;
+			tsum += (200.f * temp11) / 2047.f - 50.f;
 			got++;
 			px4_usleep(2000);
 		}
@@ -972,7 +1015,14 @@ void FlowAngle::do_null(int n)
 				    : (c.role == Role::PITOT) ? "FA_OFF_AS" : "FA_OFF_B";
 		param_t ph = param_find(pname);
 
-		if (ph != PARAM_INVALID) { param_set(ph, &mean); }
+		if (ph != PARAM_INVALID) { param_set(ph, &mean);
+
+		const float meanT = tsum / (float)got;
+		_off_temp[(int)c.role] = meanT;
+		const char *tname = (c.role == Role::ALPHA) ? "FA_OFT_A"
+				  : (c.role == Role::PITOT) ? "FA_OFT_AS" : "FA_OFT_B";
+		param_t th = param_find(tname);
+		if (th != PARAM_INVALID) { param_set(th, &meanT); }
 
 		PX4_INFO("  ch%d %-8s: offset = %.2f Pa (%d samples) -> %s",
 			 i, role_str(c.role), (double)mean, got, pname);
