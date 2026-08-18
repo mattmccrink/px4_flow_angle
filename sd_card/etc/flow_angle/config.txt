@@ -18,11 +18,16 @@
 #     family  = 4515 | 4525                      (informational; both decode identically)
 #     bidir   = yes | no                         (differential=yes/+-FS; gage=no/0..FS; default yes)
 #
-# Safety net: a missing file, a version mismatch, or ANY incomplete/invalid channel
-# makes the driver ignore the file, fall back to compiled defaults, and log the reason.
-# `flow_angle status` then shows what loaded and whether each channel passed the boot
-# temperature-sanity check (a channel marked UNVERIFIED did not answer with a sane
-# temperature -- i.e. dead, unpowered, mis-addressed, or absent).
+# Optional thermal-offset model (bench oven cal -- removes the zero-flow offset's
+# drift with die temperature). All-or-nothing per channel; if present, needs:
+#     therm_model = linear | quadratic
+#     therm_c0 therm_c1 [therm_c2]  offset[Pa] = c0 + T*(c1 + T*c2), T = die degC
+#     therm_tmin therm_tmax         validated soak band [degC]; T is clamped to it
+# It is applied as a SHAPE referenced to the temperature of the last `flow_angle
+# null`, so c0 CANCELS at run time -- only the slope/curvature matter. The null
+# owns the absolute level; this table owns the durable shape. A partial or bad
+# thermal block is ignored for that channel (level-only null still applies) and
+# logged -- it never rejects the whole file.
 
 version = 1
 
@@ -33,6 +38,14 @@ ch0.range  = 4.0
 ch0.units  = inH2O
 ch0.type   = B
 ch0.family = 4515
+# thermal: quadratic; fit n=344 eq-samples -12..46C, resid 0.39Pa. PROVISIONAL --
+# hot end validated only to 46C; re-fit from a powered installed-bay soak.
+ch0.therm_model = quadratic
+ch0.therm_c0    = +0.463487
+ch0.therm_c1    = -0.107329
+ch0.therm_c2    = +0.0041574
+ch0.therm_tmin  = 5.0
+ch0.therm_tmax  = 46.0
 
 # --- channel 1: airspeed  (MS4525DO-DS5AI001DP: 0x28, +/-1 psi, type A) ---
 # NOTE: 4525 parts use psi (not inH2O) and this part is output type A (not B).
@@ -42,6 +55,14 @@ ch1.range  = 1.0
 ch1.units  = psi
 ch1.type   = A
 ch1.family = 4525
+# thermal: linear; quantization-limited (resid 3.4Pa ~ 3 counts), slope tiny.
+# Shape correction is ~0.5Pa over a 20C drift -- negligible vs airspeed q, kept
+# for consistency. PROVISIONAL hot end (45C).
+ch1.therm_model = linear
+ch1.therm_c0    = -79.1612
+ch1.therm_c1    = -0.02264
+ch1.therm_tmin  = 5.0
+ch1.therm_tmax  = 45.0
 
 # --- channel 2: sideslip  (MS4515DO, +/-4 inH2O, type B) ---
 ch2.role   = beta
@@ -50,3 +71,11 @@ ch2.range  = 4.0
 ch2.units  = inH2O
 ch2.type   = B
 ch2.family = 4515
+# thermal: quadratic (saturating; c2<0); fit n=344 eq -11..44C, resid 0.45Pa.
+# PROVISIONAL hot end (44C).
+ch2.therm_model = quadratic
+ch2.therm_c0    = +12.9063
+ch2.therm_c1    = +0.145264
+ch2.therm_c2    = -0.00214617
+ch2.therm_tmin  = 5.0
+ch2.therm_tmax  = 44.0
