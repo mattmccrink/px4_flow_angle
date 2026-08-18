@@ -65,8 +65,7 @@ public:
 	bool clamped_hot(float t) const { return _valid && t > _tmax; }
 
 private:
-	static bool finite(float x) { return (x == x) && (x < 1e30f) && (x > -1e30f); }
-
+	static bool finite(float x) { return __builtin_isfinite(x); }
 	float   _c0{0.f}, _c1{0.f}, _c2{0.f};
 	float   _tmin{0.f}, _tmax{0.f};
 	bool    _valid{false};
