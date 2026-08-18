@@ -1015,7 +1015,7 @@ void FlowAngle::do_null(int n)
 				    : (c.role == Role::PITOT) ? "FA_OFF_AS" : "FA_OFF_B";
 		param_t ph = param_find(pname);
 
-		if (ph != PARAM_INVALID) { param_set(ph, &mean);
+		if (ph != PARAM_INVALID) { param_set(ph, &mean);}
 
 		const float meanT = tsum / (float)got;
 		_off_temp[(int)c.role] = meanT;
