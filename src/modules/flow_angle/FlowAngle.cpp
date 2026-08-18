@@ -804,6 +804,9 @@ void FlowAngle::publish_cycle()
 	out.device_id          = get_device_id();
 	out.valid              = valid;
 	out.timestamp          = now;
+	out.temp_alpha_c = a     ? a->temp_c     : 0.f;
+	out.temp_beta_c  = b     ? b->temp_c     : 0.f;
+	out.temp_pitot_c = pitot ? pitot->temp_c : 0.f;
 	_flow_angle_pub.publish(out);
 
 	// --- live QGC mirror (DEBUG_FLOAT_ARRAY) ---

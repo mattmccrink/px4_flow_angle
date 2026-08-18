@@ -13,6 +13,10 @@ float32 beta_rad              # sideslip (rad)
 float32 dp_alpha_pa           # raw alpha port-pair differential (Pa)
 float32 dp_beta_pa            # raw beta port-pair differential (Pa)
 
+float32 temp_alpha_c          # alpha sensor die temperature (degC)
+float32 temp_beta_c           # beta sensor die temperature (degC)
+float32 temp_pitot_c          # airspeed sensor die temperature (degC)
+
 uint32 device_id              # driver device id
 
 bool valid                    # true when q > FA_Q_MIN and all channels read OK
